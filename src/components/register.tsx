@@ -15,8 +15,8 @@ import {
 } from "lucide-react";
 
 import { auth } from "../services/firebase";
-
 import { saveUserProfile } from "../services/userService";
+import ThemeToggle from "./themeToggle";
 
 function Register() {
   const navigate = useNavigate();
@@ -32,58 +32,100 @@ function Register() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleRegister = async (e: FormEvent) => {
-    e.preventDefault();
-    setError("");
 
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
+const handleRegister = async (e: FormEvent) => {
+  e.preventDefault();
+  setError("");
+
+  const trimmedName = name.trim();
+  const trimmedEmail = email.trim();
+
+  // Name validation
+  if (!trimmedName) {
+    setError("Name cannot be empty or contain only spaces.");
+    return;
+  }
+
+  if (trimmedName.length > 50) {
+    setError("Name cannot exceed 50 characters.");
+    return;
+  }
+
+  // Email validation
+  if (!trimmedEmail) {
+    setError("Email is required.");
+    return;
+  }
+
+  // Password validation
+  if (password.length < 8) {
+    setError("Password must be at least 8 characters.");
+    return;
+  }
+
+  if (
+    !/[A-Z]/.test(password) ||
+    !/[a-z]/.test(password) ||
+    !/[0-9]/.test(password)
+  ) {
+    setError(
+      "Password must contain uppercase, lowercase and a number."
+    );
+    return;
+  }
+
+  if (password !== confirmPassword) {
+    setError("Passwords do not match.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const userCredential = await createUserWithEmailAndPassword(
+      auth,
+      trimmedEmail,
+      password
+    );
+
+    await updateProfile(userCredential.user, {
+      displayName: trimmedName,
+    });
+
+    await saveUserProfile(userCredential.user);
+
+    navigate("/dashboard");
+  } catch (error: unknown) {
+    let errorCode = "";
+
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error
+    ) {
+      errorCode = String(error.code);
     }
 
-    setLoading(true);
-
-    try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        password
-      );
-
-      await updateProfile(userCredential.user, {
-        displayName: name,
-      });
-
-      await saveUserProfile(userCredential.user);
-
-      navigate("/dashboard");
-    } catch (error: unknown) {
-      let errorCode = "";
-
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error
-      ) {
-        errorCode = String(error.code);
-      }
-
-      if (errorCode === "auth/email-already-in-use") {
-        setError("This email is already registered.");
-      } else if (errorCode === "auth/weak-password") {
-        setError("Password should be at least 6 characters.");
-      } else if (errorCode === "auth/invalid-email") {
-        setError("Please enter a valid email address.");
-      } else {
-        setError("Something went wrong. Please try again.");
-      }
-    } finally {
-      setLoading(false);
+    if (errorCode === "auth/email-already-in-use") {
+      setError("This email is already registered.");
+    } else if (errorCode === "auth/weak-password") {
+      setError("Password is too weak.");
+    } else if (errorCode === "auth/invalid-email") {
+      setError("Please enter a valid email address.");
+    } else {
+      setError("Something went wrong. Please try again.");
     }
-  };
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
-    <div className="min-h-screen bg-[#f0f2f5] text-gray-900 [color-scheme:light]">
+    <div className="min-h-screen bg-[#f0f2f5] dark:bg-[#111b21] text-gray-900 dark:text-gray-100 scheme-light dark:scheme-dark">
+      <div className="fixed right-5 top-5 z-50">
+        <ThemeToggle />
+      </div>
 
       {/* Green Header */}
       <header className="h-52 bg-[#00a884]">
@@ -99,19 +141,19 @@ function Register() {
 
       {/* Register Card */}
       <main className="max-w-5xl mx-auto px-4 -mt-24 pb-12">
-        <div className="bg-white rounded-xl shadow-lg overflow-hidden grid md:grid-cols-2">
+        <div className="bg-white dark:bg-[#202c33] rounded-xl shadow-lg overflow-hidden grid md:grid-cols-2">
 
           {/* Left Panel */}
-          <div className="hidden md:flex bg-[#f7f9fa] flex-col justify-center items-center p-10 text-center border-r border-gray-100">
+          <div className="hidden md:flex bg-[#f7f9fa] dark:bg-[#182229] flex-col justify-center items-center p-10 text-center border-r border-gray-100 dark:border-gray-700">
             <div className="w-36 h-36 rounded-full bg-[#d9fdd3] flex items-center justify-center mb-7">
               <MessageCircle size={76} className="text-[#00a884]" />
             </div>
 
-            <h1 className="text-3xl font-light text-gray-800 mb-4" style={{ color: "#1f2937" }}>
+            <h1 className="text-3xl font-light text-gray-800 dark:text-gray-100 mb-4">
               Join ChatSpace
             </h1>
 
-            <p className="text-gray-500 leading-7 max-w-xs">
+            <p className="text-gray-500 dark:text-gray-400 leading-7 max-w-xs">
               Create your account and start connecting with friends
               and people around you.
             </p>
@@ -129,11 +171,11 @@ function Register() {
                 GET STARTED
               </p>
 
-              <h2 className="text-3xl font-semibold text-gray-800" style={{ color: "#1f2937" }}>
+              <h2 className="text-3xl font-semibold text-gray-800 dark:text-gray-100">
                 Create Account
               </h2>
 
-              <p className="text-gray-500 text-sm mt-2">
+              <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">
                 Fill in your details to get started.
               </p>
             </div>
@@ -142,12 +184,12 @@ function Register() {
 
               {/* Name */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Full name
                 </label>
 
-                <div className="flex items-center border border-gray-300 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
-                  <User size={19} className="text-gray-400" />
+                <div className="flex items-center border border-gray-300 dark:border-gray-600 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
+                  <User size={19} className="text-gray-400 dark:text-gray-500" />
 
                   <input
                     type="text"
@@ -155,19 +197,19 @@ function Register() {
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Enter your name"
                     required
-                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 bg-transparent"
+                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-transparent"
                   />
                 </div>
               </div>
 
               {/* Email */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Email address
                 </label>
 
-                <div className="flex items-center border border-gray-300 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
-                  <Mail size={19} className="text-gray-400" />
+                <div className="flex items-center border border-gray-300 dark:border-gray-600 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
+                  <Mail size={19} className="text-gray-400 dark:text-gray-500" />
 
                   <input
                     type="email"
@@ -175,19 +217,19 @@ function Register() {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     required
-                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 bg-transparent"
+                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-transparent"
                   />
                 </div>
               </div>
 
               {/* Password */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Password
                 </label>
 
-                <div className="flex items-center border border-gray-300 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
-                  <LockKeyhole size={19} className="text-gray-400" />
+                <div className="flex items-center border border-gray-300 dark:border-gray-600 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
+                  <LockKeyhole size={19} className="text-gray-400 dark:text-gray-500" />
 
                   <input
                     type={showPassword ? "text" : "password"}
@@ -195,13 +237,13 @@ function Register() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Create a password"
                     required
-                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 bg-transparent"
+                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-transparent"
                   />
 
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="text-gray-400 hover:text-gray-700"
+                    className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-white"
                     aria-label="Toggle password visibility"
                   >
                     {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
@@ -211,12 +253,12 @@ function Register() {
 
               {/* Confirm Password */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Confirm password
                 </label>
 
-                <div className="flex items-center border border-gray-300 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
-                  <LockKeyhole size={19} className="text-gray-400" />
+                <div className="flex items-center border border-gray-300 dark:border-gray-600 rounded-lg px-3 transition focus-within:border-[#00a884] focus-within:ring-2 focus-within:ring-[#00a884]/15">
+                  <LockKeyhole size={19} className="text-gray-400 dark:text-gray-500" />
 
                   <input
                     type={showConfirmPassword ? "text" : "password"}
@@ -224,7 +266,7 @@ function Register() {
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Confirm your password"
                     required
-                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 bg-transparent"
+                    className="w-full py-3 px-3 outline-none text-sm text-gray-800 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 bg-transparent"
                   />
 
                   <button
@@ -232,7 +274,7 @@ function Register() {
                     onClick={() =>
                       setShowConfirmPassword(!showConfirmPassword)
                     }
-                    className="text-gray-400 hover:text-gray-700"
+                    className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-white"
                     aria-label="Toggle confirm password visibility"
                   >
                     {showConfirmPassword ? (
@@ -246,7 +288,7 @@ function Register() {
 
               {/* Error */}
               {error && (
-                <div className="bg-red-50 border border-red-100 text-red-600 text-sm rounded-lg px-4 py-3">
+                <div className="bg-red-50 dark:bg-red-950/40 border border-red-100 dark:border-red-900 text-red-600 dark:text-red-400 text-sm rounded-lg px-4 py-3">
                   {error}
                 </div>
               )}
@@ -261,7 +303,7 @@ function Register() {
               </button>
             </form>
 
-            <div className="mt-7 text-center text-sm text-gray-500">
+            <div className="mt-7 text-center text-sm text-gray-500 dark:text-gray-400">
               Already have an account?{" "}
               <Link
                 to="/"
@@ -273,7 +315,7 @@ function Register() {
           </div>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-7">
+        <p className="text-center text-xs text-gray-400 dark:text-gray-500 mt-7">
           ChatSpace · Stay connected with the people who matter.
         </p>
       </main>

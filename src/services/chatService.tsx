@@ -7,7 +7,7 @@ import {
   onValue,
 } from "firebase/database";
 
-import { database } from "./firebase";
+import { auth, database } from "./firebase";
 
 export type ChatMessage = {
   id: string;
@@ -23,7 +23,7 @@ export async function getOrCreatePrivateChat(
   const participants = [currentUserId, otherUserId].sort();
   const chatId = participants.join("_");
 
-  const chatRef = ref(database, `chats/${chatId}`);
+  const chatRef = ref(database, `chat_room/${chatId}`);
   const snapshot = await get(chatRef);
 
   if (!snapshot.exists()) {
@@ -62,6 +62,11 @@ export async function sendMessage(
   senderId: string,
   text: string
 ) {
+  console.log("AUTH CHECK:", {
+    currentAuthUid: auth.currentUser?.uid,
+    senderId,
+    chatId,
+  });
   const messagesRef = ref(database, `messages/${chatId}`);
 
   // Generate a unique message ID
@@ -79,11 +84,12 @@ export async function sendMessage(
   updates[`messages/${chatId}/${newMessageRef.key}`] = messageData;
 
   // Update chat's latest message
-  updates[`chats/${chatId}/lastMessage`] = text;
-  updates[`chats/${chatId}/lastMessageAt`] = messageData.createdAt;
+  updates[`chat_room/${chatId}/lastMessage`] = text;
+  updates[`chat_room/${chatId}/lastMessageAt`] = messageData.createdAt;
 
   await update(ref(database), updates);
 }
+
 
 
 
@@ -123,7 +129,7 @@ export type ActiveChat = {
   otherUserId: string;
   lastMessage: string;
   lastMessageAt: number;
-  unreadCount : number;
+  unreadCount: number;
 };
 
 type ChatData = {
@@ -169,10 +175,10 @@ export function subscribeToActiveChatUserIds(
 
     const unreadCount = lastReadAt
       ? messages.filter(
-          item =>
-            item.senderId !== currentUserId &&
-            item.createdAt > lastReadAt
-        ).length
+        item =>
+          item.senderId !== currentUserId &&
+          item.createdAt > lastReadAt
+      ).length
       : 0;
 
     activeChats.set(chatId, {
@@ -233,7 +239,7 @@ export function subscribeToActiveChatUserIds(
 
         const chatRef = ref(
           database,
-          `chats/${chatId}`
+          `chat_room/${chatId}`
         );
 
         const messagesRef = ref(
@@ -259,9 +265,9 @@ export function subscribeToActiveChatUserIds(
 
             const messages: ChatMessage[] = data
               ? Object.entries(data).map(([id, message]) => ({
-                  id,
-                  ...(message as Omit<ChatMessage, "id">),
-                }))
+                id,
+                ...(message as Omit<ChatMessage, "id">),
+              }))
               : [];
 
             messagesByChat.set(chatId, messages);
@@ -306,4 +312,25 @@ export async function markChatAsRead(
   );
 
   await set(lastReadAtRef, Date.now());
+}
+
+
+
+
+
+export function subscribeToUserLastReadAt(
+  userId: string,
+  chatId: string,
+  callback: (lastReadAt: number) => void
+) {
+  const lastReadAtRef = ref(
+    database,
+    `userChats/${userId}/${chatId}/lastReadAt`
+  );
+
+  const unsubscribe = onValue(lastReadAtRef, (snapshot) => {
+    callback(snapshot.val() ?? 0);
+  });
+
+  return unsubscribe;
 }

@@ -13,6 +13,7 @@ import { database } from "./firebase";
 
 
 export function trackPresence(userId: string) {
+  console.log("TRACK PRESENCE CALLED");
   const connectedRef = ref(database, ".info/connected");
 
   const userConnectionsRef = ref(
@@ -74,6 +75,7 @@ export function trackPresence(userId: string) {
 
   // Explicit cleanup for logout
   const cleanup = async () => {
+    console.log("PRESENCE CLEANUP CALLED");
     isActive = false;
     connectionAttempt++;
 

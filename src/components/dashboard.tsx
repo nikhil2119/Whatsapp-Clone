@@ -1,7 +1,6 @@
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { signOut } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -21,7 +20,6 @@ import {
   ArrowLeft,
 } from "lucide-react";
 
-import { auth } from "../services/firebase";
 import { useAuth } from "../hooks/useAuth";
 
 import {
@@ -35,15 +33,17 @@ import {
   subscribeToMessages,
   subscribeToActiveChatUserIds,
   markChatAsRead,
+  subscribeToUserLastReadAt,
   type ActiveChat,
   type ChatMessage,
 } from "../services/chatService";
 
 import {
-  trackPresence,
   subscribeToUserPresence,
   type UserPresence,
 } from "../services/presenceService";
+
+import ThemeToggle from "./themeToggle";
 
 function formatChatTime(timestamp: number) {
   const messageDate = new Date(timestamp);
@@ -68,9 +68,7 @@ function formatChatTime(timestamp: number) {
 
 function Dashboard() {
   const navigate = useNavigate();
-  const { user } = useAuth();
-
-  const presenceControllerRef = useRef<ReturnType<typeof trackPresence> | null>(null);
+  const { user, logout } = useAuth();
 
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [selectedChat, setSelectedChat] = useState<UserProfile | null>(null);
@@ -82,6 +80,8 @@ function Dashboard() {
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);
   const [selectedUserPresence, setSelectedUserPresence] =
     useState<UserPresence | null>(null);
+  const [otherUserLastReadAt, setOtherUserLastReadAt] = useState(0);
+  const [dashboardError, setDashboardError] = useState("");
 
   // Fetch registered users
   useEffect(() => {
@@ -114,22 +114,12 @@ function Dashboard() {
     return () => unsubscribe();
   }, [user?.uid]);
 
-  // Online or Offline
-  useEffect(() => {
-    if (!user?.uid) return;
-
-    const presenceController = trackPresence(user.uid);
-    presenceControllerRef.current = presenceController;
-
-    return () => {
-      presenceController.cleanup();
-      presenceControllerRef.current = null;
-    };
-  }, [user?.uid]);
-
   // Listen to selected user's presence
   useEffect(() => {
-    if (!selectedChat?.uid) return;
+    if (!selectedChat?.uid) {
+      setSelectedUserPresence(null);
+      return;
+    }
 
     const unsubscribe = subscribeToUserPresence(
       selectedChat.uid,
@@ -141,13 +131,26 @@ function Dashboard() {
     return () => unsubscribe();
   }, [selectedChat?.uid]);
 
+  // Listen to recipient's last read timestamp
+  useEffect(() => {
+    if (!selectedChat?.uid || !activeChatId) {
+      setOtherUserLastReadAt(0);
+      return;
+    }
+
+    const unsubscribe = subscribeToUserLastReadAt(
+      selectedChat.uid,
+      activeChatId,
+      setOtherUserLastReadAt
+    );
+
+    return () => unsubscribe();
+  }, [selectedChat?.uid, activeChatId]);
+
   // Logout
   const handleLogout = async () => {
     try {
-      await presenceControllerRef.current?.cleanup();
-      presenceControllerRef.current = null;
-
-      await signOut(auth);
+      await logout();
       navigate("/");
     } catch (error) {
       console.error("Logout failed:", error);
@@ -163,6 +166,8 @@ function Dashboard() {
     setSearchText("");
     setActiveChatId(null);
     setMessages([]);
+    setOtherUserLastReadAt(0);
+    setDashboardError("");
 
     try {
       const chatId = await getOrCreatePrivateChat(
@@ -174,12 +179,16 @@ function Dashboard() {
       setActiveChatId(chatId);
     } catch (error) {
       console.error("Error opening chat:", error);
+      setDashboardError("Failed to open conversation. Please try again.");
     }
   };
 
   // Back to chats
   const handleBackToChats = () => {
     setSelectedChat(null);
+    setActiveChatId(null);
+    setOtherUserLastReadAt(0);
+    setDashboardError("");
   };
 
   // Listen for Firebase messages
@@ -213,6 +222,13 @@ function Dashboard() {
 
     if (!trimmedMessage || !user || !activeChatId) return;
 
+    if (trimmedMessage.length > 5000) {
+      setDashboardError("Message cannot exceed 5000 characters.");
+      return;
+    }
+
+    setDashboardError("");
+
     try {
       await sendMessage(
         activeChatId,
@@ -223,6 +239,7 @@ function Dashboard() {
       setMessage("");
     } catch (error) {
       console.error("Error sending message:", error);
+      setDashboardError("Failed to send message. Please try again.");
     }
   };
 
@@ -264,12 +281,12 @@ function Dashboard() {
     : sortedUsers;
 
   return (
-    <div className="grid h-dvh min-h-[375px] min-w-[375px] w-full grid-cols-[64px_minmax(300px,31%)_minmax(0,1fr)] overflow-hidden bg-[#f0f2f5] font-[Arial,Helvetica,sans-serif] text-sm leading-[1.4] text-[#111b21] max-[900px]:grid-cols-[56px_minmax(260px,36%)_minmax(0,1fr)] max-[640px]:grid-cols-[48px_minmax(0,1fr)]">
+    <div className="grid h-dvh min-h-93.75 min-w-93.75 w-full grid-cols-[64px_minmax(300px,31%)_minmax(0,1fr)] overflow-hidden bg-[#f0f2f5] dark:bg-[#111b21] font-[Arial,Helvetica,sans-serif] text-sm leading-[1.4] text-[#111b21] dark:text-[#e9edef] max-[900px]:grid-cols-[56px_minmax(260px,36%)_minmax(0,1fr)] max-[640px]:grid-cols-[48px_minmax(0,1fr)]">
 
       {/* Navigation rail */}
       <aside
         aria-label="Main navigation"
-        className="z-10 flex flex-col items-center justify-between border-r border-[#dfe3e5] bg-[#f0f2f5] py-[18px] pb-4 max-[900px]:pt-3 max-[640px]:py-3"
+        className="z-10 flex flex-col items-center justify-between border-r border-[#dfe3e5] dark:border-[#303d45] bg-[#f0f2f5] dark:bg-[#202c33] py-[18px] pb-4 max-[900px]:pt-3 max-[640px]:py-3"
       >
         <div className="flex flex-col items-center gap-[18px] max-[640px]:gap-3">
           <div
@@ -282,7 +299,7 @@ function Dashboard() {
           <button
             title="Chats"
             aria-label="Chats"
-            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-xl bg-[#dfe5e7] text-[#202c33] shadow-[inset_3px_0_0_#00a884] transition-colors duration-150 max-[640px]:h-9 max-[640px]:w-9"
+            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-xl bg-[#dfe5e7] dark:bg-[#374650] text-[#202c33] dark:text-[#e9edef] shadow-[inset_3px_0_0_#00a884] transition-colors duration-150 max-[640px]:h-9 max-[640px]:w-9"
           >
             <MessageCircle size={21} />
           </button>
@@ -290,7 +307,7 @@ function Dashboard() {
           <button
             title="Contacts"
             aria-label="Contacts"
-            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#dfe5e7] hover:text-[#202c33] max-[640px]:h-9 max-[640px]:w-9"
+            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#dfe5e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-9 max-[640px]:w-9"
           >
             <CircleUserRound size={21} />
           </button>
@@ -298,7 +315,7 @@ function Dashboard() {
           <button
             title="Settings"
             aria-label="Settings"
-            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#dfe5e7] hover:text-[#202c33] max-[640px]:h-9 max-[640px]:w-9"
+            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#dfe5e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-9 max-[640px]:w-9"
           >
             <Settings size={21} />
           </button>
@@ -314,11 +331,13 @@ function Dashboard() {
               "U"}
           </div>
 
+          <ThemeToggle />
+
           <button
             onClick={handleLogout}
             title="Logout"
             aria-label="Logout"
-            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#dfe5e7] hover:text-[#202c33] max-[640px]:h-9 max-[640px]:w-9"
+            className="grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#dfe3e5] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-9 max-[640px]:w-9"
           >
             <LogOut size={20} />
           </button>
@@ -327,15 +346,14 @@ function Dashboard() {
 
       {/* Chat list */}
       <section
-        className={`flex min-w-0 flex-col overflow-hidden border-r border-[#e9edef] bg-white max-[640px]:border-r-0 ${
+        className={`flex min-w-0 flex-col overflow-hidden border-r border-[#e9edef] dark:border-[#303d45] bg-white dark:bg-[#111b21] max-[640px]:border-r-0 ${
           selectedChat
             ? "max-[640px]:hidden"
             : "max-[640px]:flex"
         }`}
       >
-        {/* List header */}
         <header className="flex h-[60px] shrink-0 items-center justify-between px-5 max-[900px]:px-3 max-[640px]:px-3">
-          <h1 className="m-0 text-[21px] font-bold tracking-normal text-[#111b21] max-[900px]:text-lg max-[640px]:text-lg">
+          <h1 className="m-0 text-[21px] font-bold tracking-normal text-[#111b21] dark:text-[#e9edef] max-[900px]:text-lg max-[640px]:text-lg">
             {isNewChatOpen ? "New Chat" : "WhatsApp"}
           </h1>
 
@@ -348,7 +366,7 @@ function Dashboard() {
               }}
               aria-label="Back to chats"
               title="Back to chats"
-              className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-9 max-[640px]:w-9"
+              className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-9 max-[640px]:w-9"
             >
               <ArrowLeft size={21} />
             </button>
@@ -361,7 +379,7 @@ function Dashboard() {
               }}
               aria-label="New chat"
               title="New chat"
-              className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-9 max-[640px]:w-9"
+              className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#202c33] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-9 max-[640px]:w-9"
             >
               <Plus size={21} />
             </button>
@@ -370,16 +388,15 @@ function Dashboard() {
 
         {/* Search */}
         <div className="px-3 pt-1 pb-3 max-[640px]:px-2">
-          <label className="flex h-9 items-center gap-3 rounded-lg bg-[#f0f2f5] px-3 text-[#667781] transition-shadow duration-150 focus-within:shadow-[0_0_0_1px_#b7c3c9] max-[640px]:gap-2 max-[640px]:px-2">
+          <label className="flex h-9 items-center gap-3 rounded-lg bg-[#f0f2f5] dark:bg-[#202c33] px-3 text-[#667781] dark:text-[#aebac1] transition-shadow duration-150 focus-within:shadow-[0_0_0_1px_#b7c3c9] max-[640px]:gap-2 max-[640px]:px-2">
             <Search size={17} aria-hidden="true" className="shrink-0" />
-
             <input
               type="text"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="Search or start a new chat"
               aria-label="Search users"
-              className="w-full min-w-0 border-0 bg-transparent p-0 text-[13px] text-[#111b21] outline-none placeholder:text-[#667781] placeholder:opacity-100"
+              className="w-full min-w-0 border-0 bg-transparent p-0 text-[13px] text-[#111b21] dark:text-[#e9edef] outline-none placeholder:text-[#667781] dark:placeholder:text-[#8696a0] placeholder:opacity-100"
             />
           </label>
         </div>
@@ -391,21 +408,19 @@ function Dashboard() {
               <button
                 key={profile.uid}
                 onClick={() => handleSelectChat(profile)}
-                className={`flex min-h-[76px] w-full cursor-pointer items-center gap-[13px] border-0 border-b border-[#f0f2f5] px-[14px] py-[10px] text-left transition-colors duration-150 max-[640px]:gap-2 max-[640px]:px-2 ${
+                className={`flex min-h-[76px] w-full cursor-pointer items-center gap-[13px] border-0 border-b border-[#f0f2f5] dark:border-[#202c33] px-[14px] py-[10px] text-left transition-colors duration-150 max-[640px]:gap-2 max-[640px]:px-2 ${
                   selectedChat?.uid === profile.uid
-                    ? "bg-[#f0f2f5]"
-                    : "bg-white hover:bg-[#f5f6f6]"
+                    ? "bg-[#f0f2f5] dark:bg-[#2a3942]"
+                    : "bg-white dark:bg-[#111b21] hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]"
                 }`}
               >
-                {/* Avatar */}
                 <div className="grid h-[49px] w-[49px] shrink-0 place-items-center rounded-full bg-[#d9fdd3] text-[19px] font-medium text-[#075e54] max-[900px]:h-[42px] max-[900px]:w-[42px] max-[640px]:h-[38px] max-[640px]:w-[38px] max-[640px]:text-base">
                   {profile.username.charAt(0).toUpperCase() || "U"}
                 </div>
 
-                {/* User details */}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2 max-[640px]:gap-1">
-                    <h3 className="m-0 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[16px] font-medium text-[#111b21] max-[640px]:text-sm">
+                    <h3 className="m-0 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[16px] font-medium text-[#111b21] dark:text-[#e9edef] max-[640px]:text-sm">
                       {profile.username}
                     </h3>
 
@@ -434,7 +449,7 @@ function Dashboard() {
                     )}
                   </div>
 
-                  <p className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] text-[#667781] max-[640px]:text-[11px]">
+                  <p className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] text-[#667781] dark:text-[#aebac1] max-[640px]:text-[11px]">
                     {isNewChatOpen
                       ? "Start a conversation"
                       : activeChats.find(
@@ -456,9 +471,8 @@ function Dashboard() {
         </div>
 
         {/* Account footer */}
-        <footer className="flex min-h-[50px] items-center gap-[9px] border-t border-[#e9edef] bg-[#f8f9fa] px-[15px] text-[11px] text-[#667781] max-[640px]:px-2">
+        <footer className="flex min-h-[50px] items-center gap-[9px] border-t border-[#e9edef] dark:border-[#303d45] bg-[#f8f9fa] dark:bg-[#202c33] px-[15px] text-[11px] text-[#667781] dark:text-[#aebac1] max-[640px]:px-2">
           <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#00a884]" />
-
           <span className="overflow-hidden text-ellipsis whitespace-nowrap">
             Logged in as {user?.displayName || user?.email}
           </span>
@@ -467,7 +481,7 @@ function Dashboard() {
 
       {/* Conversation */}
       <main
-        className={`relative flex min-w-0 flex-col overflow-hidden bg-[#efeae2] bg-[radial-gradient(rgba(17,27,33,0.045)_0.7px,transparent_0.7px)] bg-[length:18px_18px] ${
+        className={`relative flex min-w-0 flex-col overflow-hidden bg-[#efeae2] dark:bg-[#0b141a] bg-[radial-gradient(rgba(17,27,33,0.045)_0.7px,transparent_0.7px)] dark:bg-none bg-[length:18px_18px] ${
           selectedChat
             ? "max-[640px]:flex"
             : "max-[640px]:hidden"
@@ -476,17 +490,14 @@ function Dashboard() {
         {selectedChat ? (
           <>
             {/* Conversation header */}
-            <header className="z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[#e9edef] bg-[#f0f2f5] px-[18px] pl-5 max-[900px]:px-3 max-[640px]:px-2">
-
+            <header className="z-10 flex h-[60px] shrink-0 items-center justify-between border-b border-[#e9edef] dark:border-[#303d45] bg-[#f0f2f5] dark:bg-[#202c33] px-[18px] pl-5 max-[900px]:px-3 max-[640px]:px-2">
               <div className="flex min-w-0 items-center gap-[13px] max-[640px]:gap-2">
-
-                {/* Back button */}
                 <button
                   type="button"
                   onClick={handleBackToChats}
                   aria-label="Back to chats"
                   title="Back to chats"
-                  className="hidden h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] hover:bg-[#dfe5e7] max-[640px]:grid max-[640px]:h-8 max-[640px]:w-8"
+                  className="hidden h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-[#dfe5e7] dark:hover:bg-[#374650] max-[640px]:grid max-[640px]:h-8 max-[640px]:w-8"
                 >
                   <ArrowLeft size={21} />
                 </button>
@@ -496,11 +507,11 @@ function Dashboard() {
                 </div>
 
                 <div className="min-w-0">
-                  <h2 className="m-0 overflow-hidden text-ellipsis whitespace-nowrap text-[16px] font-medium text-[#111b21] max-[640px]:text-sm">
+                  <h2 className="m-0 overflow-hidden text-ellipsis whitespace-nowrap text-[16px] font-medium text-[#111b21] dark:text-[#e9edef] max-[640px]:text-sm">
                     {selectedChat.username}
                   </h2>
 
-                  <p className="mt-0.5 text-xs text-[#667781] max-[640px]:text-[10px]">
+                  <p className="mt-0.5 text-xs text-[#667781] dark:text-[#aebac1] max-[640px]:text-[10px]">
                     {selectedUserPresence?.isOnline
                       ? "online"
                       : "offline"}
@@ -508,10 +519,9 @@ function Dashboard() {
                 </div>
               </div>
 
-              {/* Header actions */}
-              <div className="flex shrink-0 items-center gap-[6px] text-[#54656f] max-[900px]:gap-0 max-[640px]:gap-0">
+              <div className="flex shrink-0 items-center gap-[6px] text-[#54656f] dark:text-[#aebac1] max-[900px]:gap-0 max-[640px]:gap-0">
                 <button
-                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-8 max-[640px]:w-8"
+                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
                   aria-label="Voice call"
                   title="Voice call"
                 >
@@ -519,7 +529,7 @@ function Dashboard() {
                 </button>
 
                 <button
-                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-8 max-[640px]:w-8"
+                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
                   aria-label="Video call"
                   title="Video call"
                 >
@@ -527,7 +537,7 @@ function Dashboard() {
                 </button>
 
                 <button
-                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-8 max-[640px]:w-8"
+                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
                   aria-label="More options"
                   title="More options"
                 >
@@ -539,12 +549,14 @@ function Dashboard() {
             {/* Messages */}
             <section className="z-0 flex flex-1 flex-col gap-[9px] overflow-y-auto px-[clamp(18px,5vw,72px)] py-6 [scrollbar-color:#c7cdd0_transparent] [scrollbar-width:thin] max-[900px]:px-5 max-[640px]:px-2 max-[640px]:py-3">
               {activeChatId === null ? (
-                <div className="m-auto self-center rounded-lg bg-white/90 px-[13px] py-[9px] text-center text-[13px] text-[#54656f] shadow-[0_1px_1px_rgba(11,20,26,0.1)]">
+                <div className="m-auto self-center rounded-lg bg-white/90 dark:bg-[#202c33] px-[13px] py-[9px] text-center text-[13px] text-[#54656f] dark:text-[#e9edef] shadow-[0_1px_1px_rgba(11,20,26,0.1)]">
                   Opening conversation...
                 </div>
               ) : messages.length > 0 ? (
                 messages.map((item) => {
                   const isSent = item.senderId === user?.uid;
+                  const isRead =
+                    isSent && item.createdAt <= otherUserLastReadAt;
 
                   return (
                     <div
@@ -556,15 +568,15 @@ function Dashboard() {
                       <div
                         className={`min-w-[90px] max-w-[min(72%,620px)] rounded-lg px-[11px] pt-2 pb-[5px] shadow-[0_1px_1px_rgba(11,20,26,0.13)] max-[640px]:max-w-[90%] ${
                           isSent
-                            ? "rounded-tr-[2px] bg-[#d9fdd3]"
-                            : "rounded-tl-[2px] bg-white"
+                            ? "rounded-tr-[2px] bg-[#d9fdd3] dark:bg-[#005c4b]"
+                            : "rounded-tl-[2px] bg-white dark:bg-[#202c33]"
                         }`}
                       >
-                        <p className="m-0 whitespace-pre-wrap break-words text-sm leading-[1.45] text-[#111b21] [overflow-wrap:anywhere]">
+                        <p className="m-0 whitespace-pre-wrap wrap-break-word text-sm leading-[1.45] text-[#111b21] dark:text-[#e9edef] [overflow-wrap:anywhere]">
                           {item.text}
                         </p>
 
-                        <div className="mt-[3px] flex items-center justify-end gap-[3px] text-[10px] leading-none text-[#667781]">
+                        <div className="mt-[3px] flex items-center justify-end gap-[3px] text-[10px] leading-none text-[#667781] dark:text-[#aebac1]">
                           <span>
                             {new Date(item.createdAt).toLocaleTimeString([], {
                               hour: "2-digit",
@@ -575,7 +587,11 @@ function Dashboard() {
                           {isSent && (
                             <CheckCheck
                               size={15}
-                              className="text-[#53bdeb]"
+                              className={
+                                isRead
+                                  ? "text-[#53bdeb]"
+                                  : "text-[#8696a0]"
+                              }
                             />
                           )}
                         </div>
@@ -584,7 +600,7 @@ function Dashboard() {
                   );
                 })
               ) : (
-                <div className="m-auto flex items-center gap-[7px] self-center rounded-lg bg-[#fff5c4] px-[13px] py-[9px] text-center text-[13px] text-[#54656f] shadow-none max-[640px]:mx-1">
+                <div className="m-auto flex items-center gap-[7px] self-center rounded-lg bg-[#fff5c4] dark:bg-[#3b3520] px-[13px] py-[9px] text-center text-[13px] text-[#54656f] dark:text-[#e9edef] shadow-none max-[640px]:mx-1">
                   <span className="shrink-0 text-[#8696a0]">🔒</span>
                   <span className="break-words">
                     Start a conversation with {selectedChat.username}
@@ -593,14 +609,21 @@ function Dashboard() {
               )}
             </section>
 
+            {/* Dashboard error message */}
+            {dashboardError && (
+              <div className="absolute bottom-[75px] left-1/2 z-20 -translate-x-1/2 rounded-lg bg-red-100 px-4 py-2 text-sm text-red-700 shadow">
+                {dashboardError}
+              </div>
+            )}
+
             {/* Message composer */}
             <form
               onSubmit={handleSendMessage}
-              className="z-10 flex min-h-[70px] shrink-0 items-center gap-2 bg-[#f0f2f5] px-5 py-[10px] max-[900px]:gap-[3px] max-[900px]:px-[10px] max-[640px]:gap-1 max-[640px]:px-1 max-[640px]:py-2"
+              className="z-10 flex min-h-[70px] shrink-0 items-center gap-2 bg-[#f0f2f5] dark:bg-[#202c33] px-5 py-[10px] max-[900px]:gap-[3px] max-[900px]:px-[10px] max-[640px]:gap-1 max-[640px]:px-1 max-[640px]:py-2"
             >
               <button
                 type="button"
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-8 max-[640px]:w-8"
+                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
                 aria-label="Emoji"
               >
                 <Smile size={22} />
@@ -608,7 +631,7 @@ function Dashboard() {
 
               <button
                 type="button"
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] transition-colors duration-150 hover:bg-[#f0f2f5] hover:text-[#202c33] max-[640px]:h-8 max-[640px]:w-8"
+                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
                 aria-label="Attach file"
               >
                 <Paperclip size={21} />
@@ -620,7 +643,8 @@ function Dashboard() {
                 placeholder="Type a message"
                 aria-label="Type a message"
                 disabled={!activeChatId}
-                className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white px-4 text-sm text-[#111b21] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
+                maxLength={5000}
+                className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
               />
 
               <button
@@ -638,21 +662,20 @@ function Dashboard() {
             </form>
           </>
         ) : (
-          /* Welcome screen */
-          <div className="flex flex-1 flex-col items-center justify-center border-b-[5px] border-[#00a884] bg-[#f8f9fa] px-[30px] py-[30px] text-center max-[640px]:hidden">
-            <div className="mb-[25px] grid h-[170px] w-[170px] place-items-center rounded-full border border-[#e8edef] bg-[#f0f2f5] text-[#00a884]">
+          <div className="flex flex-1 flex-col items-center justify-center border-b-[5px] border-[#00a884] bg-[#f8f9fa] dark:bg-[#111b21] px-[30px] py-[30px] text-center max-[640px]:hidden">
+            <div className="mb-[25px] grid h-[170px] w-[170px] place-items-center rounded-full border border-[#e8edef] dark:border-[#303d45] bg-[#f0f2f5] dark:bg-[#202c33] text-[#00a884]">
               <MessageCircle size={64} strokeWidth={1.35} />
             </div>
 
-            <h2 className="m-0 text-[30px] font-light tracking-normal text-[#41525d]">
+            <h2 className="m-0 text-[30px] font-light tracking-normal text-[#41525d] dark:text-[#e9edef]">
               WhatsApp Web
             </h2>
 
-            <p className="mt-3 max-w-[420px] text-sm text-[#667781]">
+            <p className="mt-3 max-w-[420px] text-sm text-[#667781] dark:text-[#aebac1]">
               Send and receive messages without keeping your phone online.
             </p>
 
-            <div className="mt-[58px] flex items-center gap-[6px] text-xs text-[#8696a0]">
+            <div className="mt-[58px] flex items-center gap-[6px] text-xs text-[#8696a0] dark:text-[#8696a0]">
               <span className="shrink-0">🔒</span>
               <span>Your personal messages are private</span>
             </div>
