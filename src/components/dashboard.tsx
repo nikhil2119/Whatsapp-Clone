@@ -1,6 +1,6 @@
 
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -21,6 +21,9 @@ import {
   Users,
   UserPlus,
   LogIn,
+  X,
+  FileText,
+  Download,
 } from "lucide-react";
 
 import { useAuth } from "../hooks/useAuth";
@@ -59,10 +62,19 @@ import {
 } from "../services/presenceService";
 
 import {
+  uploadChatMedia,
+  formatFileSize,
+  detectMediaType,
+  type MediaAttachment,
+} from "../services/storageService";
+
+import {
   CreateGroupModal,
   JoinGroupModal,
   GroupInviteCodeBadge,
 } from "./groupChat";
+
+import { EncryptedMedia } from "./EncryptedMedia";
 
 import ThemeToggle from "./themeToggle";
 
@@ -119,6 +131,14 @@ function Dashboard() {
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isJoinGroupOpen, setIsJoinGroupOpen] = useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+
+  // Media upload state
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
 
   // ── Subscriptions ──────────────────────────────────────────────
 
@@ -266,6 +286,7 @@ function Dashboard() {
     setOtherUserLastReadAt(0);
     setDashboardError("");
     setGroupMenuOpen(false);
+    clearSelectedFile();
 
     try {
       const chatId = await getOrCreatePrivateChat(
@@ -291,6 +312,7 @@ function Dashboard() {
     setDashboardError("");
     setGroupMenuOpen(false);
     setSearchText("");
+    clearSelectedFile();
 
     if (user?.uid) {
       markGroupAsRead(user.uid, group.id).catch((err) => {
@@ -307,6 +329,45 @@ function Dashboard() {
     setOtherUserLastReadAt(0);
     setDashboardError("");
     setGroupMenuOpen(false);
+    clearSelectedFile();
+  };
+
+  // Clear selected media
+  const clearSelectedFile = () => {
+    if (filePreviewUrl) {
+      URL.revokeObjectURL(filePreviewUrl);
+    }
+    setSelectedFile(null);
+    setFilePreviewUrl(null);
+    setUploadProgress(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // Handle file selection
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      setDashboardError("File size cannot exceed 10 MB.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    setDashboardError("");
+    if (filePreviewUrl) {
+      URL.revokeObjectURL(filePreviewUrl);
+    }
+
+    setSelectedFile(file);
+    const mediaType = detectMediaType(file.type);
+    if (mediaType === "image" || mediaType === "video") {
+      setFilePreviewUrl(URL.createObjectURL(file));
+    } else {
+      setFilePreviewUrl(null);
+    }
   };
 
   // Send message (private)
@@ -315,7 +376,7 @@ function Dashboard() {
 
     const trimmedMessage = message.trim();
 
-    if (!trimmedMessage || !user || !activeChatId) return;
+    if ((!trimmedMessage && !selectedFile) || !user || !activeChatId || isUploading) return;
 
     if (trimmedMessage.length > 5000) {
       setDashboardError("Message cannot exceed 5000 characters.");
@@ -325,15 +386,32 @@ function Dashboard() {
     setDashboardError("");
 
     try {
+      let media: MediaAttachment | undefined;
+
+      if (selectedFile) {
+        setIsUploading(true);
+        setUploadProgress(0);
+        media = await uploadChatMedia(activeChatId, selectedFile, setUploadProgress);
+      }
+
       await sendMessage(
         activeChatId,
         user.uid,
-        trimmedMessage
+        trimmedMessage,
+        media
       );
       setMessage("");
+      clearSelectedFile();
     } catch (error) {
       console.error("Error sending message:", error);
-      setDashboardError("Failed to send message. Please try again.");
+      setDashboardError(
+        error instanceof Error
+          ? error.message
+          : "Failed to send message. Please try again."
+      );
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -343,7 +421,7 @@ function Dashboard() {
 
     const trimmedMessage = message.trim();
 
-    if (!trimmedMessage || !user || !selectedGroup) return;
+    if ((!trimmedMessage && !selectedFile) || !user || !selectedGroup || isUploading) return;
 
     if (trimmedMessage.length > 5000) {
       setDashboardError("Message cannot exceed 5000 characters.");
@@ -353,11 +431,33 @@ function Dashboard() {
     setDashboardError("");
 
     try {
-      await sendGroupMessage(selectedGroup.id, user.uid, trimmedMessage);
+      let media: MediaAttachment | undefined;
+
+      if (selectedFile) {
+        setIsUploading(true);
+        setUploadProgress(0);
+        media = await uploadChatMedia(selectedGroup.id, selectedFile, setUploadProgress);
+      }
+
+      await sendGroupMessage(
+        selectedGroup.id,
+        user.uid,
+        trimmedMessage,
+        false,
+        media
+      );
       setMessage("");
+      clearSelectedFile();
     } catch (error) {
       console.error("Error sending group message:", error);
-      setDashboardError("Failed to send message. Please try again.");
+      setDashboardError(
+        error instanceof Error
+          ? error.message
+          : "Failed to send message. Please try again."
+      );
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -484,6 +584,68 @@ function Dashboard() {
     0
   );
 
+  // Render media inside a message bubble (shared for private & group chats)
+  const renderMessageMedia = (item: ChatMessage) => {
+    if (!item.mediaUrl) return null;
+    return <EncryptedMedia item={item} onImageClick={setLightboxImageUrl} />;
+  };
+
+  // Render selected file preview bar above composer
+  const renderMediaPreviewBar = () => {
+    if (!selectedFile) return null;
+    const mediaType = detectMediaType(selectedFile.type);
+
+    return (
+      <div className="z-10 flex items-center gap-3 border-t border-[#e9edef] dark:border-[#303d45] bg-[#f8f9fa] dark:bg-[#1a2730] px-5 py-2.5 max-[640px]:px-2">
+        {mediaType === "image" && filePreviewUrl ? (
+          <img
+            src={filePreviewUrl}
+            alt={selectedFile.name}
+            className="h-12 w-12 shrink-0 rounded-md object-cover"
+          />
+        ) : mediaType === "video" && filePreviewUrl ? (
+          <video
+            src={filePreviewUrl}
+            className="h-12 w-12 shrink-0 rounded-md bg-black object-cover"
+          />
+        ) : (
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-md bg-[#00a884]/15 text-[#00a884]">
+            <FileText size={22} />
+          </div>
+        )}
+
+        <div className="min-w-0 flex-1">
+          <p className="m-0 truncate text-xs font-medium text-[#111b21] dark:text-[#e9edef]">
+            {selectedFile.name}
+          </p>
+          <p className="m-0 text-[11px] text-[#667781] dark:text-[#aebac1]">
+            {formatFileSize(selectedFile.size)}
+            {isUploading && uploadProgress !== null && ` • Uploading ${uploadProgress}%`}
+          </p>
+          {isUploading && uploadProgress !== null && (
+            <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[#dfe3e5] dark:bg-[#303d45]">
+              <div
+                className="h-full bg-[#00a884] transition-all duration-150"
+                style={{ width: `${uploadProgress}%` }}
+              />
+            </div>
+          )}
+        </div>
+
+        {!isUploading && (
+          <button
+            type="button"
+            onClick={clearSelectedFile}
+            aria-label="Remove attachment"
+            className="grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-[#dfe5e7] dark:hover:bg-[#374650]"
+          >
+            <X size={18} />
+          </button>
+        )}
+      </div>
+    );
+  };
+
   // ── Render ─────────────────────────────────────────────────────
 
   return (
@@ -508,8 +670,8 @@ function Dashboard() {
             aria-label="Chats"
             onClick={() => { setSidebarTab("chats"); setIsNewChatOpen(false); setSearchText(""); }}
             className={`relative grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-xl transition-colors duration-150 max-[640px]:h-9 max-[640px]:w-9 ${sidebarTab === "chats"
-                ? "bg-[#dfe5e7] dark:bg-[#374650] text-[#202c33] dark:text-[#e9edef] shadow-[inset_3px_0_0_#00a884]"
-                : "text-[#54656f] dark:text-[#aebac1] hover:bg-[#dfe5e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
+              ? "bg-[#dfe5e7] dark:bg-[#374650] text-[#202c33] dark:text-[#e9edef] shadow-[inset_3px_0_0_#00a884]"
+              : "text-[#54656f] dark:text-[#aebac1] hover:bg-[#dfe5e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
               }`}
           >
             <MessageCircle size={21} />
@@ -526,8 +688,8 @@ function Dashboard() {
             aria-label="Groups"
             onClick={() => { setSidebarTab("groups"); setIsNewChatOpen(false); setSearchText(""); }}
             className={`relative grid h-[42px] w-[42px] shrink-0 cursor-pointer place-items-center rounded-xl transition-colors duration-150 max-[640px]:h-9 max-[640px]:w-9 ${sidebarTab === "groups"
-                ? "bg-[#dfe5e7] dark:bg-[#374650] text-[#202c33] dark:text-[#e9edef] shadow-[inset_3px_0_0_#00a884]"
-                : "text-[#54656f] dark:text-[#aebac1] hover:bg-[#dfe5e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
+              ? "bg-[#dfe5e7] dark:bg-[#374650] text-[#202c33] dark:text-[#e9edef] shadow-[inset_3px_0_0_#00a884]"
+              : "text-[#54656f] dark:text-[#aebac1] hover:bg-[#dfe5e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
               }`}
           >
             <Users size={21} />
@@ -581,8 +743,8 @@ function Dashboard() {
       {/* ═══ Chat / Group list ═══ */}
       <section
         className={`flex min-w-0 flex-col overflow-hidden border-r border-[#e9edef] dark:border-[#303d45] bg-white dark:bg-[#111b21] max-[640px]:border-r-0 ${isConversationOpen
-            ? "max-[640px]:hidden"
-            : "max-[640px]:flex"
+          ? "max-[640px]:hidden"
+          : "max-[640px]:flex"
           }`}
       >
         <header className="flex h-[60px] shrink-0 items-center justify-between px-5 max-[900px]:px-3 max-[640px]:px-3">
@@ -673,8 +835,8 @@ function Dashboard() {
                   key={group.id}
                   onClick={() => handleSelectGroup(group)}
                   className={`flex min-h-[76px] w-full cursor-pointer items-center gap-[13px] border-0 border-b border-[#f0f2f5] dark:border-[#202c33] px-[14px] py-[10px] text-left transition-colors duration-150 max-[640px]:gap-2 max-[640px]:px-2 ${selectedGroup?.id === group.id
-                      ? "bg-[#f0f2f5] dark:bg-[#2a3942]"
-                      : "bg-white dark:bg-[#111b21] hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]"
+                    ? "bg-[#f0f2f5] dark:bg-[#2a3942]"
+                    : "bg-white dark:bg-[#111b21] hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]"
                     }`}
                 >
                   <div className="grid h-[49px] w-[49px] shrink-0 place-items-center rounded-full bg-[#00a884]/15 text-[19px] font-medium text-[#00a884] max-[900px]:h-[42px] max-[900px]:w-[42px] max-[640px]:h-[38px] max-[640px]:w-[38px] max-[640px]:text-base">
@@ -723,8 +885,8 @@ function Dashboard() {
                   key={profile.uid}
                   onClick={() => handleSelectChat(profile)}
                   className={`flex min-h-[76px] w-full cursor-pointer items-center gap-[13px] border-0 border-b border-[#f0f2f5] dark:border-[#202c33] px-[14px] py-[10px] text-left transition-colors duration-150 max-[640px]:gap-2 max-[640px]:px-2 ${selectedChat?.uid === profile.uid
-                      ? "bg-[#f0f2f5] dark:bg-[#2a3942]"
-                      : "bg-white dark:bg-[#111b21] hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]"
+                    ? "bg-[#f0f2f5] dark:bg-[#2a3942]"
+                    : "bg-white dark:bg-[#111b21] hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]"
                     }`}
                 >
                   <div className="grid h-[49px] w-[49px] shrink-0 place-items-center rounded-full bg-[#d9fdd3] text-[19px] font-medium text-[#075e54] max-[900px]:h-[42px] max-[900px]:w-[42px] max-[640px]:h-[38px] max-[640px]:w-[38px] max-[640px]:text-base">
@@ -796,8 +958,8 @@ function Dashboard() {
       {/* ═══ Conversation pane ═══ */}
       <main
         className={`relative flex min-w-0 flex-col overflow-hidden bg-[#efeae2] dark:bg-[#0b141a] bg-[radial-gradient(rgba(17,27,33,0.045)_0.7px,transparent_0.7px)] dark:bg-none bg-[length:18px_18px] ${isConversationOpen
-            ? "max-[640px]:flex"
-            : "max-[640px]:hidden"
+          ? "max-[640px]:flex"
+          : "max-[640px]:hidden"
           }`}
       >
         {/* ── GROUP conversation ── */}
@@ -892,8 +1054,8 @@ function Dashboard() {
                     >
                       <div
                         className={`min-w-[90px] max-w-[min(72%,620px)] rounded-lg px-[11px] pt-2 pb-[5px] shadow-[0_1px_1px_rgba(11,20,26,0.13)] max-[640px]:max-w-[90%] ${isSent
-                            ? "rounded-tr-[2px] bg-[#d9fdd3] dark:bg-[#005c4b]"
-                            : "rounded-tl-[2px] bg-white dark:bg-[#202c33]"
+                          ? "rounded-tr-[2px] bg-[#d9fdd3] dark:bg-[#005c4b]"
+                          : "rounded-tl-[2px] bg-white dark:bg-[#202c33]"
                           }`}
                       >
                         {/* Sender name for received messages */}
@@ -903,9 +1065,13 @@ function Dashboard() {
                           </p>
                         )}
 
-                        <p className="m-0 whitespace-pre-wrap wrap-break-word text-sm leading-[1.45] text-[#111b21] dark:text-[#e9edef] [overflow-wrap:anywhere]">
-                          {item.text}
-                        </p>
+                        {renderMessageMedia(item)}
+
+                        {item.text && (
+                          <p className="m-0 whitespace-pre-wrap wrap-break-word text-sm leading-[1.45] text-[#111b21] dark:text-[#e9edef] [overflow-wrap:anywhere]">
+                            {item.text}
+                          </p>
+                        )}
 
                         <div className="mt-[3px] flex items-center justify-end gap-[3px] text-[10px] leading-none text-[#667781] dark:text-[#aebac1]">
                           <span>
@@ -936,6 +1102,8 @@ function Dashboard() {
               </div>
             )}
 
+            {renderMediaPreviewBar()}
+
             {/* Group message composer */}
             <form
               onSubmit={handleSendGroupMessage}
@@ -951,8 +1119,11 @@ function Dashboard() {
 
               <button
                 type="button"
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white disabled:cursor-not-allowed max-[640px]:h-8 max-[640px]:w-8"
                 aria-label="Attach file"
+                title="Attach photo, video, or document"
               >
                 <Paperclip size={21} />
               </button>
@@ -960,18 +1131,19 @@ function Dashboard() {
               <input
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Type a message"
+                placeholder={selectedFile ? "Add a caption (optional)" : "Type a message"}
                 aria-label="Type a message"
+                disabled={isUploading}
                 maxLength={5000}
-                className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
+                className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
               />
 
               <button
                 type="submit"
-                disabled={!message.trim()}
-                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${!message.trim()
-                    ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
-                    : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
+                disabled={(!message.trim() && !selectedFile) || isUploading}
+                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${(!message.trim() && !selectedFile) || isUploading
+                  ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
+                  : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
                   }`}
                 aria-label="Send message"
               >
@@ -1059,13 +1231,17 @@ function Dashboard() {
                     >
                       <div
                         className={`min-w-[90px] max-w-[min(72%,620px)] rounded-lg px-[11px] pt-2 pb-[5px] shadow-[0_1px_1px_rgba(11,20,26,0.13)] max-[640px]:max-w-[90%] ${isSent
-                            ? "rounded-tr-[2px] bg-[#d9fdd3] dark:bg-[#005c4b]"
-                            : "rounded-tl-[2px] bg-white dark:bg-[#202c33]"
+                          ? "rounded-tr-[2px] bg-[#d9fdd3] dark:bg-[#005c4b]"
+                          : "rounded-tl-[2px] bg-white dark:bg-[#202c33]"
                           }`}
                       >
-                        <p className="m-0 whitespace-pre-wrap wrap-break-word text-sm leading-[1.45] text-[#111b21] dark:text-[#e9edef] [overflow-wrap:anywhere]">
-                          {item.text}
-                        </p>
+                        {renderMessageMedia(item)}
+
+                        {item.text && (
+                          <p className="m-0 whitespace-pre-wrap wrap-break-word text-sm leading-[1.45] text-[#111b21] dark:text-[#e9edef] [overflow-wrap:anywhere]">
+                            {item.text}
+                          </p>
+                        )}
 
                         <div className="mt-[3px] flex items-center justify-end gap-[3px] text-[10px] leading-none text-[#667781] dark:text-[#aebac1]">
                           <span>
@@ -1107,6 +1283,8 @@ function Dashboard() {
               </div>
             )}
 
+            {renderMediaPreviewBar()}
+
             {/* Message composer */}
             <form
               onSubmit={handleSendMessage}
@@ -1122,8 +1300,11 @@ function Dashboard() {
 
               <button
                 type="button"
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!activeChatId || isUploading}
+                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white disabled:cursor-not-allowed max-[640px]:h-8 max-[640px]:w-8"
                 aria-label="Attach file"
+                title="Attach photo, video, or document"
               >
                 <Paperclip size={21} />
               </button>
@@ -1131,19 +1312,19 @@ function Dashboard() {
               <input
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Type a message"
+                placeholder={selectedFile ? "Add a caption (optional)" : "Type a message"}
                 aria-label="Type a message"
-                disabled={!activeChatId}
+                disabled={!activeChatId || isUploading}
                 maxLength={5000}
                 className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
               />
 
               <button
                 type="submit"
-                disabled={!activeChatId || !message.trim()}
-                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${!activeChatId || !message.trim()
-                    ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
-                    : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
+                disabled={!activeChatId || (!message.trim() && !selectedFile) || isUploading}
+                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${!activeChatId || (!message.trim() && !selectedFile) || isUploading
+                  ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
+                  : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
                   }`}
                 aria-label="Send message"
               >
@@ -1188,6 +1369,38 @@ function Dashboard() {
         onClose={() => setIsJoinGroupOpen(false)}
         onJoinGroup={handleJoinGroup}
       />
+
+      {/* Hidden file input for media uploads */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
+      {/* Fullscreen image lightbox */}
+      {lightboxImageUrl && (
+        <div
+          onClick={() => setLightboxImageUrl(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4"
+        >
+          <button
+            type="button"
+            onClick={() => setLightboxImageUrl(null)}
+            aria-label="Close image preview"
+            className="absolute right-4 top-4 grid h-10 w-10 cursor-pointer place-items-center rounded-full bg-white/15 text-white hover:bg-white/25"
+          >
+            <X size={22} />
+          </button>
+          <img
+            src={lightboxImageUrl}
+            alt="Full preview"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90dvh] max-w-[90vw] rounded-lg object-contain"
+          />
+        </div>
+      )}
     </div>
   );
 }

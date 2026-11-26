@@ -10,6 +10,7 @@ import {
 
 import { database } from "./firebase";
 import type { ChatMessage } from "./chatService";
+import { getMediaPreviewLabel, type MediaAttachment } from "./storageService";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -184,22 +185,36 @@ export async function sendGroupMessage(
   groupId: string,
   senderId: string,
   text: string,
-  isSystem = false
+  isSystem = false,
+  media?: MediaAttachment
 ): Promise<void> {
   const messagesRef = ref(database, `messages/${groupId}`);
   const newMessageRef = push(messagesRef);
 
-  const messageData = {
+  const messageData: Record<string, unknown> = {
     senderId,
     text,
     createdAt: Date.now(),
     isSystem,
   };
 
+  if (media) {
+    messageData.mediaUrl = media.mediaUrl;
+    messageData.mediaType = media.mediaType;
+    messageData.fileName = media.fileName;
+    messageData.fileSize = media.fileSize;
+    messageData.mediaKey = media.mediaKey;
+    messageData.mediaIv = media.mediaIv;
+    messageData.mimeType = media.mimeType;
+  }
+
+  const lastMessagePreview =
+    text || (media ? getMediaPreviewLabel(media) : "");
+
   const updates: Record<string, unknown> = {};
 
   updates[`messages/${groupId}/${newMessageRef.key}`] = messageData;
-  updates[`group_chats/${groupId}/lastMessage`] = text;
+  updates[`group_chats/${groupId}/lastMessage`] = lastMessagePreview;
   updates[`group_chats/${groupId}/lastMessageAt`] = messageData.createdAt;
   updates[`group_chats/${groupId}/lastMessageSender`] = senderId;
 

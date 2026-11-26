@@ -8,12 +8,20 @@ import {
 } from "firebase/database";
 
 import { auth, database } from "./firebase";
+import { getMediaPreviewLabel, type MediaAttachment, type MediaType } from "./storageService";
 
 export type ChatMessage = {
   id: string;
   senderId: string;
   text: string;
   createdAt: number;
+  mediaUrl?: string;
+  mediaType?: MediaType;
+  fileName?: string;
+  fileSize?: number;
+  mediaKey?: string;
+  mediaIv?: string;
+  mimeType?: string;
 };
 
 export async function getOrCreatePrivateChat(
@@ -60,7 +68,8 @@ export async function getOrCreatePrivateChat(
 export async function sendMessage(
   chatId: string,
   senderId: string,
-  text: string
+  text: string,
+  media?: MediaAttachment
 ) {
   console.log("AUTH CHECK:", {
     currentAuthUid: auth.currentUser?.uid,
@@ -72,11 +81,24 @@ export async function sendMessage(
   // Generate a unique message ID
   const newMessageRef = push(messagesRef);
 
-  const messageData = {
+  const messageData: Record<string, unknown> = {
     senderId,
     text,
     createdAt: Date.now(),
   };
+
+  if (media) {
+    messageData.mediaUrl = media.mediaUrl;
+    messageData.mediaType = media.mediaType;
+    messageData.fileName = media.fileName;
+    messageData.fileSize = media.fileSize;
+    messageData.mediaKey = media.mediaKey;
+    messageData.mediaIv = media.mediaIv;
+    messageData.mimeType = media.mimeType;
+  }
+
+  const lastMessagePreview =
+    text || (media ? getMediaPreviewLabel(media) : "");
 
   const updates: Record<string, unknown> = {};
 
@@ -84,7 +106,7 @@ export async function sendMessage(
   updates[`messages/${chatId}/${newMessageRef.key}`] = messageData;
 
   // Update chat's latest message
-  updates[`chat_room/${chatId}/lastMessage`] = text;
+  updates[`chat_room/${chatId}/lastMessage`] = lastMessagePreview;
   updates[`chat_room/${chatId}/lastMessageAt`] = messageData.createdAt;
 
   await update(ref(database), updates);
