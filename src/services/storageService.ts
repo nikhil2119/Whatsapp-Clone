@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export type MediaType = "image" | "video" | "file";
+export type MediaType = "image" | "video" | "audio" | "file";
 
 export type MediaAttachment = {
   mediaUrl: string;
@@ -17,6 +17,7 @@ const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 export function detectMediaType(mimeType: string): MediaType {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
   return "file";
 }
 
@@ -29,6 +30,7 @@ export function formatFileSize(bytes: number): string {
 export function getMediaPreviewLabel(media: MediaAttachment): string {
   if (media.mediaType === "image") return "📷 Photo";
   if (media.mediaType === "video") return "🎥 Video";
+  if (media.mediaType === "audio") return "🎤 Voice message";
   return `📎 ${media.fileName}`;
 }
 
@@ -121,7 +123,7 @@ export async function decryptMediaToBlobUrl(
   return URL.createObjectURL(decryptedBlob);
 }
 
-// ── Upload Encrypted File to Cloudinary ────────────────────────────
+// ── Upload Encrypted File to Cloudinary ───────────────────────────
 
 export async function uploadChatMedia(
   chatId: string,

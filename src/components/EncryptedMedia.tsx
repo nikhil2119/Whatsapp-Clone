@@ -102,6 +102,16 @@ export function EncryptedMedia({ item, onImageClick }: EncryptedMediaProps) {
     );
   }
 
+  if (item.mediaType === "audio") {
+    return (
+      <audio
+        src={resolvedUrl}
+        controls
+        className="mb-1 h-10 w-[260px] max-w-full"
+      />
+    );
+  }
+
   return (
     <a
       href={resolvedUrl}

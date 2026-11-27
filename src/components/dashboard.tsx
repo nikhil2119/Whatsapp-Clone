@@ -23,7 +23,8 @@ import {
   LogIn,
   X,
   FileText,
-  Download,
+  Mic,
+  Trash2,
 } from "lucide-react";
 
 import { useAuth } from "../hooks/useAuth";
@@ -166,6 +167,15 @@ function Dashboard() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [lightboxImageUrl, setLightboxImageUrl] = useState<string | null>(null);
+
+  // Voice recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const cancelRecordingFlagRef = useRef(false);
 
   // ── Subscriptions ──────────────────────────────────────────────
 
@@ -314,6 +324,7 @@ function Dashboard() {
     setDashboardError("");
     setGroupMenuOpen(false);
     clearSelectedFile();
+    cancelVoiceRecording();
 
     try {
       const chatId = await getOrCreatePrivateChat(
@@ -340,6 +351,7 @@ function Dashboard() {
     setGroupMenuOpen(false);
     setSearchText("");
     clearSelectedFile();
+    cancelVoiceRecording();
 
     if (user?.uid) {
       markGroupAsRead(user.uid, group.id).catch((err) => {
@@ -357,7 +369,150 @@ function Dashboard() {
     setDashboardError("");
     setGroupMenuOpen(false);
     clearSelectedFile();
+    cancelVoiceRecording();
   };
+
+  // Voice recording helpers
+  const cleanupRecordingResources = () => {
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (recordingStreamRef.current) {
+      recordingStreamRef.current.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    setIsRecording(false);
+    setRecordingSeconds(0);
+  };
+
+  const cancelVoiceRecording = () => {
+    cancelRecordingFlagRef.current = true;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    } else {
+      cleanupRecordingResources();
+    }
+  };
+
+  const stopAndSendVoiceRecording = () => {
+    cancelRecordingFlagRef.current = false;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+  };
+
+  const startVoiceRecording = async () => {
+    if (!user || isRecording || isUploading) return;
+    if (!activeChatId && !selectedGroup) return;
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setDashboardError("Voice recording is not supported in this browser.");
+      return;
+    }
+
+    setDashboardError("");
+    clearSelectedFile();
+
+    const targetGroup = selectedGroup;
+    const targetPrivateChatId = activeChatId;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      audioChunksRef.current = [];
+      cancelRecordingFlagRef.current = false;
+
+      const preferredTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+      const mimeType =
+        preferredTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const shouldCancel = cancelRecordingFlagRef.current;
+        const chunks = [...audioChunksRef.current];
+        const recordedMimeType = recorder.mimeType || "audio/webm";
+
+        cleanupRecordingResources();
+
+        if (shouldCancel || chunks.length === 0) return;
+
+        const ext = recordedMimeType.includes("mp4") ? "mp4" : "webm";
+        const audioBlob = new Blob(chunks, { type: recordedMimeType });
+        const voiceFile = new File(
+          [audioBlob],
+          `voice_note_${Date.now()}.${ext}`,
+          { type: recordedMimeType }
+        );
+
+        const uploadTargetId = targetGroup ? targetGroup.id : targetPrivateChatId;
+        if (!uploadTargetId) return;
+
+        try {
+          setIsUploading(true);
+          setUploadProgress(0);
+          const media = await uploadChatMedia(
+            uploadTargetId,
+            voiceFile,
+            setUploadProgress
+          );
+
+          if (targetGroup) {
+            await sendGroupMessage(targetGroup.id, user.uid, "", false, media);
+          } else if (targetPrivateChatId) {
+            await sendMessage(targetPrivateChatId, user.uid, "", media);
+          }
+        } catch (error) {
+          console.error("Error sending voice note:", error);
+          setDashboardError(
+            error instanceof Error
+              ? error.message
+              : "Failed to send voice note."
+          );
+        } finally {
+          setIsUploading(false);
+          setUploadProgress(null);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (error) {
+      console.error("Microphone access error:", error);
+      cleanupRecordingResources();
+      setDashboardError("Microphone permission denied or unavailable.");
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelVoiceRecording();
+    };
+  }, []);
 
   // Clear selected media
   const clearSelectedFile = () => {
@@ -624,6 +779,27 @@ function Dashboard() {
 
   // Render selected file preview bar above composer
   const renderMediaPreviewBar = () => {
+    if (isUploading && !selectedFile) {
+      return (
+        <div className="z-10 flex items-center gap-3 border-t border-[#e9edef] dark:border-[#303d45] bg-[#f8f9fa] dark:bg-[#1a2730] px-5 py-2.5 max-[640px]:px-2">
+          <Mic size={18} className="shrink-0 animate-pulse text-[#00a884]" />
+          <div className="min-w-0 flex-1">
+            <p className="m-0 text-xs font-medium text-[#111b21] dark:text-[#e9edef]">
+              Sending voice note... {uploadProgress !== null ? `${uploadProgress}%` : ""}
+            </p>
+            {uploadProgress !== null && (
+              <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[#dfe3e5] dark:bg-[#303d45]">
+                <div
+                  className="h-full bg-[#00a884] transition-all duration-150"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     if (!selectedFile) return null;
     const mediaType = detectMediaType(selectedFile.type);
 
@@ -675,6 +851,119 @@ function Dashboard() {
           </button>
         )}
       </div>
+    );
+  };
+
+  // Shared message + voice composer for both Private & Group chats
+  const renderComposer = (
+    onSubmit: (e: FormEvent) => Promise<void>,
+    isDisabled: boolean
+  ) => {
+    const mins = Math.floor(recordingSeconds / 60);
+    const secs = String(recordingSeconds % 60).padStart(2, "0");
+
+    if (isRecording) {
+      return (
+        <div className="z-10 flex min-h-[70px] shrink-0 items-center gap-3 bg-[#f0f2f5] dark:bg-[#202c33] px-5 py-[10px] max-[900px]:px-[10px] max-[640px]:px-2">
+          <button
+            type="button"
+            onClick={cancelVoiceRecording}
+            aria-label="Cancel voice recording"
+            title="Cancel recording"
+            className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-red-500 transition-colors hover:bg-red-500/10"
+          >
+            <Trash2 size={20} />
+          </button>
+
+          <div className="flex flex-1 items-center gap-2.5 rounded-lg bg-white dark:bg-[#2a3942] px-4 h-[42px]">
+            <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500" />
+            <span className="text-sm font-medium text-[#111b21] dark:text-[#e9edef]">
+              Recording...
+            </span>
+            <span className="ml-auto font-mono text-xs text-[#667781] dark:text-[#aebac1]">
+              {mins}:{secs}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={stopAndSendVoiceRecording}
+            aria-label="Send voice note"
+            title="Send voice note"
+            className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-[#00a884] text-white transition-colors hover:bg-[#008f72]"
+          >
+            <Send size={19} />
+          </button>
+        </div>
+      );
+    }
+
+    const hasContent = Boolean(message.trim() || selectedFile);
+
+    return (
+      <form
+        onSubmit={onSubmit}
+        className="z-10 flex min-h-[70px] shrink-0 items-center gap-2 bg-[#f0f2f5] dark:bg-[#202c33] px-5 py-[10px] max-[900px]:gap-[3px] max-[900px]:px-[10px] max-[640px]:gap-1 max-[640px]:px-1 max-[640px]:py-2"
+      >
+        <button
+          type="button"
+          className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
+          aria-label="Emoji"
+        >
+          <Smile size={22} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isDisabled || isUploading}
+          className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white disabled:cursor-not-allowed max-[640px]:h-8 max-[640px]:w-8"
+          aria-label="Attach file"
+          title="Attach photo, video, or document"
+        >
+          <Paperclip size={21} />
+        </button>
+
+        <input
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder={selectedFile ? "Add a caption (optional)" : "Type a message"}
+          aria-label="Type a message"
+          disabled={isDisabled || isUploading}
+          maxLength={5000}
+          className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
+        />
+
+        {hasContent ? (
+          <button
+            type="submit"
+            disabled={isDisabled || isUploading}
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${
+              isDisabled || isUploading
+                ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
+                : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
+            }`}
+            aria-label="Send message"
+          >
+            <Send size={19} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={startVoiceRecording}
+            disabled={isDisabled || isUploading}
+            aria-label="Record voice note"
+            title="Record voice note"
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${
+              isDisabled || isUploading
+                ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
+                : "cursor-pointer text-[#54656f] dark:text-[#aebac1] hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
+            }`}
+          >
+            <Mic size={21} />
+          </button>
+        )}
+      </form>
     );
   };
 
@@ -1170,51 +1459,7 @@ function Dashboard() {
             {renderMediaPreviewBar()}
 
             {/* Group message composer */}
-            <form
-              onSubmit={handleSendGroupMessage}
-              className="z-10 flex min-h-[70px] shrink-0 items-center gap-2 bg-[#f0f2f5] dark:bg-[#202c33] px-5 py-[10px] max-[900px]:gap-[3px] max-[900px]:px-[10px] max-[640px]:gap-1 max-[640px]:px-1 max-[640px]:py-2"
-            >
-              <button
-                type="button"
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
-                aria-label="Emoji"
-              >
-                <Smile size={22} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white disabled:cursor-not-allowed max-[640px]:h-8 max-[640px]:w-8"
-                aria-label="Attach file"
-                title="Attach photo, video, or document"
-              >
-                <Paperclip size={21} />
-              </button>
-
-              <input
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder={selectedFile ? "Add a caption (optional)" : "Type a message"}
-                aria-label="Type a message"
-                disabled={isUploading}
-                maxLength={5000}
-                className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
-              />
-
-              <button
-                type="submit"
-                disabled={(!message.trim() && !selectedFile) || isUploading}
-                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${(!message.trim() && !selectedFile) || isUploading
-                  ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
-                  : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
-                  }`}
-                aria-label="Send message"
-              >
-                <Send size={19} />
-              </button>
-            </form>
+            {renderComposer(handleSendGroupMessage, false)}
           </>
         ) : selectedChat ? (
           /* ── PRIVATE conversation ── */
@@ -1351,51 +1596,7 @@ function Dashboard() {
             {renderMediaPreviewBar()}
 
             {/* Message composer */}
-            <form
-              onSubmit={handleSendMessage}
-              className="z-10 flex min-h-[70px] shrink-0 items-center gap-2 bg-[#f0f2f5] dark:bg-[#202c33] px-5 py-[10px] max-[900px]:gap-[3px] max-[900px]:px-[10px] max-[640px]:gap-1 max-[640px]:px-1 max-[640px]:py-2"
-            >
-              <button
-                type="button"
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
-                aria-label="Emoji"
-              >
-                <Smile size={22} />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={!activeChatId || isUploading}
-                className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white disabled:cursor-not-allowed max-[640px]:h-8 max-[640px]:w-8"
-                aria-label="Attach file"
-                title="Attach photo, video, or document"
-              >
-                <Paperclip size={21} />
-              </button>
-
-              <input
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder={selectedFile ? "Add a caption (optional)" : "Type a message"}
-                aria-label="Type a message"
-                disabled={!activeChatId || isUploading}
-                maxLength={5000}
-                className="h-[42px] min-w-0 flex-1 rounded-lg border-0 bg-white dark:bg-[#2a3942] px-4 text-sm text-[#111b21] dark:text-[#e9edef] outline-none transition-shadow duration-150 placeholder:text-[#8696a0] dark:placeholder:text-[#aebac1] focus:shadow-[0_0_0_1px_#b7c3c9] disabled:cursor-not-allowed max-[640px]:h-[38px] max-[640px]:px-2 max-[640px]:text-xs"
-              />
-
-              <button
-                type="submit"
-                disabled={!activeChatId || (!message.trim() && !selectedFile) || isUploading}
-                className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${!activeChatId || (!message.trim() && !selectedFile) || isUploading
-                  ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
-                  : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
-                  }`}
-                aria-label="Send message"
-              >
-                <Send size={19} />
-              </button>
-            </form>
+            {renderComposer(handleSendMessage, !activeChatId)}
           </>
         ) : (
           /* ── Empty state ── */
