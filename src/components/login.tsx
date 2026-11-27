@@ -11,6 +11,9 @@ import {
 import { WhatsAppLogo } from "./WhatsAppLogo";
 
 import { auth } from "../services/firebase";
+import { signInWithGoogle } from "../services/userService";
+import { GoogleAuthButton } from "./GoogleAuthButton";
+import { PhoneAuthButton, PhoneAuthModal } from "./PhoneAuthModal";
 import ThemeToggle from "./themeToggle";
 
 function Login() {
@@ -20,7 +23,10 @@ function Login() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [isPhoneModalOpen, setIsPhoneModalOpen] = useState(false);
   const [error, setError] = useState("");
+  const isAnyLoading = loading || googleLoading;
 
 
 const handleLogin = async (e: FormEvent) => {
@@ -28,7 +34,7 @@ const handleLogin = async (e: FormEvent) => {
   setError("");
 
   // Prevent multiple submissions
-  if (loading) return;
+  if (isAnyLoading) return;
 
   const trimmedEmail = email.trim();
 
@@ -82,6 +88,31 @@ const handleLogin = async (e: FormEvent) => {
     }
   } finally {
     setLoading(false);
+  }
+};
+
+const handleGoogleLogin = async () => {
+  if (isAnyLoading) return;
+  setError("");
+  setGoogleLoading(true);
+
+  try {
+    await signInWithGoogle();
+    navigate("/dashboard");
+  } catch (err: unknown) {
+    const code =
+      typeof err === "object" && err !== null && "code" in err
+        ? String(err.code)
+        : "";
+    if (code === "auth/popup-closed-by-user") {
+      setError("Google sign-in was cancelled.");
+    } else if (code === "auth/popup-blocked") {
+      setError("Popup was blocked by your browser. Please allow popups.");
+    } else {
+      setError("Google sign-in failed. Please try again.");
+    }
+  } finally {
+    setGoogleLoading(false);
   }
 };
 
@@ -206,13 +237,24 @@ const handleLogin = async (e: FormEvent) => {
               {/* Login Button */}
               <button
                 type="submit"
-                disabled={loading}
+                disabled={isAnyLoading}
                 className="w-full bg-[#007f68] hover:bg-[#006b58] text-white font-semibold py-3 rounded-lg transition duration-200 hover:shadow-md active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {loading ? "Logging in..." : "Login"}
               </button>
 
             </form>
+
+            <GoogleAuthButton
+              onClick={handleGoogleLogin}
+              disabled={isAnyLoading}
+              label={googleLoading ? "Connecting to Google..." : "Continue with Google"}
+            />
+
+            <PhoneAuthButton
+              onClick={() => setIsPhoneModalOpen(true)}
+              disabled={isAnyLoading}
+            />
 
             <div className="mt-8 text-center text-sm text-gray-600 dark:text-gray-300">
               Don't have an account?{" "}
@@ -230,6 +272,12 @@ const handleLogin = async (e: FormEvent) => {
           ChatSpace · Stay connected with the people who matter.
         </p>
       </main>
+
+      <PhoneAuthModal
+        isOpen={isPhoneModalOpen}
+        onClose={() => setIsPhoneModalOpen(false)}
+        onSuccess={() => navigate("/dashboard")}
+      />
     </div>
   );
 }

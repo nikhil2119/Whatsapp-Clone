@@ -19,7 +19,6 @@ import {
   CheckCheck,
   ArrowLeft,
   Users,
-  UserPlus,
   LogIn,
   X,
   FileText,
@@ -674,7 +673,7 @@ function Dashboard() {
   const handleJoinGroup = async (inviteCode: string) => {
     if (!user) return;
 
-    const { groupId, groupName } = await joinGroupByInviteCode(
+    const { groupId } = await joinGroupByInviteCode(
       user.uid,
       inviteCode
     );
@@ -938,11 +937,10 @@ function Dashboard() {
           <button
             type="submit"
             disabled={isDisabled || isUploading}
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${
-              isDisabled || isUploading
-                ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
-                : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
-            }`}
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${isDisabled || isUploading
+              ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
+              : "cursor-pointer bg-[#00a884] text-white hover:bg-[#008f72]"
+              }`}
             aria-label="Send message"
           >
             <Send size={19} />
@@ -954,11 +952,10 @@ function Dashboard() {
             disabled={isDisabled || isUploading}
             aria-label="Record voice note"
             title="Record voice note"
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${
-              isDisabled || isUploading
-                ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
-                : "cursor-pointer text-[#54656f] dark:text-[#aebac1] hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
-            }`}
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border-0 transition-colors duration-150 max-[640px]:h-8 max-[640px]:w-8 ${isDisabled || isUploading
+              ? "cursor-not-allowed bg-transparent text-[#bfc9ce]"
+              : "cursor-pointer text-[#54656f] dark:text-[#aebac1] hover:bg-[#e4e6e7] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white"
+              }`}
           >
             <Mic size={21} />
           </button>

@@ -5,7 +5,6 @@ import {
   push,
   update,
   onValue,
-  remove,
 } from "firebase/database";
 
 import { database } from "./firebase";
@@ -309,9 +308,9 @@ export function subscribeToUserGroups(
         const msgData = msgSnap.val();
         const msgs: GroupMessage[] = msgData
           ? Object.entries(msgData).map(([id, message]) => ({
-              id,
-              ...(message as Omit<GroupMessage, "id">),
-            }))
+            id,
+            ...(message as Omit<GroupMessage, "id">),
+          }))
           : [];
         messagesByGroup.set(groupId, msgs);
         notify();

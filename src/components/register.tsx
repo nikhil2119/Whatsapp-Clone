@@ -15,7 +15,9 @@ import {
 import { WhatsAppLogo } from "./WhatsAppLogo";
 
 import { auth } from "../services/firebase";
-import { saveUserProfile } from "../services/userService";
+import { saveUserProfile, signInWithGoogle } from "../services/userService";
+import { GoogleAuthButton } from "./GoogleAuthButton";
+import { PhoneAuthButton, PhoneAuthModal } from "./PhoneAuthModal";
 import ThemeToggle from "./themeToggle";
 
 function Register() {
@@ -30,7 +32,10 @@ function Register() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [isPhoneModalOpen, setIsPhoneModalOpen] = useState(false);
   const [error, setError] = useState("");
+  const isAnyLoading = loading || googleLoading;
 
 
 const handleRegister = async (e: FormEvent) => {
@@ -117,6 +122,31 @@ const handleRegister = async (e: FormEvent) => {
     }
   } finally {
     setLoading(false);
+  }
+};
+
+const handleGoogleSignUp = async () => {
+  if (isAnyLoading) return;
+  setError("");
+  setGoogleLoading(true);
+
+  try {
+    await signInWithGoogle();
+    navigate("/dashboard");
+  } catch (err: unknown) {
+    const code =
+      typeof err === "object" && err !== null && "code" in err
+        ? String(err.code)
+        : "";
+    if (code === "auth/popup-closed-by-user") {
+      setError("Google sign-in was cancelled.");
+    } else if (code === "auth/popup-blocked") {
+      setError("Popup was blocked by your browser. Please allow popups.");
+    } else {
+      setError("Google sign-in failed. Please try again.");
+    }
+  } finally {
+    setGoogleLoading(false);
   }
 };
 
@@ -296,12 +326,23 @@ const handleRegister = async (e: FormEvent) => {
               {/* Register Button */}
               <button
                 type="submit"
-                disabled={loading}
+                disabled={isAnyLoading}
                 className="w-full bg-[#00a884] hover:bg-[#008f72] text-white font-semibold py-3 rounded-lg transition duration-200 hover:shadow-md active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {loading ? "Creating account..." : "Create Account"}
               </button>
             </form>
+
+            <GoogleAuthButton
+              onClick={handleGoogleSignUp}
+              disabled={isAnyLoading}
+              label={googleLoading ? "Connecting to Google..." : "Continue with Google"}
+            />
+
+            <PhoneAuthButton
+              onClick={() => setIsPhoneModalOpen(true)}
+              disabled={isAnyLoading}
+            />
 
             <div className="mt-7 text-center text-sm text-gray-500 dark:text-gray-400">
               Already have an account?{" "}
@@ -319,6 +360,12 @@ const handleRegister = async (e: FormEvent) => {
           ChatSpace · Stay connected with the people who matter.
         </p>
       </main>
+
+      <PhoneAuthModal
+        isOpen={isPhoneModalOpen}
+        onClose={() => setIsPhoneModalOpen(false)}
+        onSuccess={() => navigate("/dashboard")}
+      />
     </div>
   );
 }
