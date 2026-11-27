@@ -187,7 +187,7 @@ export function subscribeToActiveChatUserIds(
   ) => {
     const chat = latestChats.get(chatId);
     const messages = messagesByChat.get(chatId) ?? [];
-    const lastReadAt = lastReadAtByChat.get(chatId);
+    const lastReadAt = lastReadAtByChat.get(chatId) ?? 0;
 
     if (!chat || messages.length === 0) {
       activeChats.delete(chatId);
@@ -195,13 +195,11 @@ export function subscribeToActiveChatUserIds(
       return;
     }
 
-    const unreadCount = lastReadAt
-      ? messages.filter(
-        item =>
-          item.senderId !== currentUserId &&
-          item.createdAt > lastReadAt
-      ).length
-      : 0;
+    const unreadCount = messages.filter(
+      (item) =>
+        item.senderId !== currentUserId &&
+        item.createdAt > lastReadAt
+    ).length;
 
     activeChats.set(chatId, {
       otherUserId,

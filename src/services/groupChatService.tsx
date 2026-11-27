@@ -21,6 +21,7 @@ export type GroupChat = {
   createdBy: string;
   createdAt: number;
   participants: Record<string, boolean>;
+  lastRead?: Record<string, number>;
   lastMessage: string;
   lastMessageAt: number;
   lastMessageSender: string;
@@ -61,14 +62,19 @@ export async function createGroupChat(
 
   const inviteCode = generateInviteCode();
 
+  const now = Date.now();
+
   const groupData: Omit<GroupChat, "id"> = {
     name: groupName.trim(),
     description: description.trim(),
     createdBy: creatorId,
-    createdAt: Date.now(),
+    createdAt: now,
     participants,
+    lastRead: {
+      [creatorId]: now,
+    },
     lastMessage: "",
-    lastMessageAt: Date.now(),
+    lastMessageAt: now,
     lastMessageSender: "",
     inviteCode,
   };
@@ -82,9 +88,6 @@ export async function createGroupChat(
   Object.keys(participants).forEach((uid) => {
     updates[`userGroups/${uid}/${groupId}`] = true;
   });
-
-  // Mark as read for the creator
-  updates[`groupLastRead/${creatorId}/${groupId}`] = Date.now();
 
   await update(ref(database), updates);
 
@@ -131,8 +134,8 @@ export async function joinGroupByInviteCode(
 
   const updates: Record<string, unknown> = {};
   updates[`group_chats/${groupId}/participants/${userId}`] = true;
+  updates[`group_chats/${groupId}/lastRead/${userId}`] = Date.now();
   updates[`userGroups/${userId}/${groupId}`] = true;
-  updates[`groupLastRead/${userId}/${groupId}`] = Date.now();
 
   await update(ref(database), updates);
 
@@ -171,10 +174,10 @@ export async function leaveGroup(
   updates[`group_chats/${groupId}/lastMessageAt`] = now;
   updates[`group_chats/${groupId}/lastMessageSender`] = userId;
 
-  // Remove from participants, userGroups, and groupLastRead
+  // Remove from participants, lastRead, and userGroups
   updates[`group_chats/${groupId}/participants/${userId}`] = null;
+  updates[`group_chats/${groupId}/lastRead/${userId}`] = null;
   updates[`userGroups/${userId}/${groupId}`] = null;
-  updates[`groupLastRead/${userId}/${groupId}`] = null;
 
   await update(ref(database), updates);
 }
@@ -227,7 +230,10 @@ export async function markGroupAsRead(
   userId: string,
   groupId: string
 ): Promise<void> {
-  const lastReadRef = ref(database, `groupLastRead/${userId}/${groupId}`);
+  const lastReadRef = ref(
+    database,
+    `group_chats/${groupId}/lastRead/${userId}`
+  );
   await set(lastReadRef, Date.now());
 }
 
@@ -238,18 +244,16 @@ export function subscribeToUserGroups(
   callback: (groups: GroupChat[]) => void
 ) {
   const userGroupsRef = ref(database, `userGroups/${userId}`);
-  const groupLastReadRef = ref(database, `groupLastRead/${userId}`);
 
   const groupUnsubscribers = new Map<string, () => void>();
   const messageUnsubscribers = new Map<string, () => void>();
   const groupsMap = new Map<string, GroupChat>();
   const messagesByGroup = new Map<string, GroupMessage[]>();
-  const lastReadAtByGroup = new Map<string, number>();
 
   const notify = () => {
     const withUnread = [...groupsMap.values()].map((group) => {
       const messages = messagesByGroup.get(group.id) ?? [];
-      const lastReadAt = lastReadAtByGroup.get(group.id) ?? 0;
+      const lastReadAt = group.lastRead?.[userId] ?? 0;
       const unreadCount = messages.filter(
         (m) =>
           !m.isSystem &&
@@ -265,17 +269,6 @@ export function subscribeToUserGroups(
     );
     callback(sorted);
   };
-
-  const unsubscribeLastRead = onValue(groupLastReadRef, (snapshot) => {
-    const data = snapshot.val() as Record<string, number> | null;
-    lastReadAtByGroup.clear();
-    if (data) {
-      Object.entries(data).forEach(([groupId, ts]) => {
-        lastReadAtByGroup.set(groupId, ts ?? 0);
-      });
-    }
-    notify();
-  });
 
   const unsubscribeUserGroups = onValue(userGroupsRef, (snapshot) => {
     const data = snapshot.val() as Record<string, boolean> | null;
@@ -333,14 +326,12 @@ export function subscribeToUserGroups(
 
   return () => {
     unsubscribeUserGroups();
-    unsubscribeLastRead();
     groupUnsubscribers.forEach((unsub) => unsub());
     messageUnsubscribers.forEach((unsub) => unsub());
     groupUnsubscribers.clear();
     messageUnsubscribers.clear();
     groupsMap.clear();
     messagesByGroup.clear();
-    lastReadAtByGroup.clear();
   };
 }
 

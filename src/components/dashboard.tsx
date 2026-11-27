@@ -75,6 +75,7 @@ import {
 } from "./groupChat";
 
 import { EncryptedMedia } from "./EncryptedMedia";
+import { WhatsAppLogo } from "./WhatsAppLogo";
 
 import ThemeToggle from "./themeToggle";
 
@@ -99,6 +100,30 @@ function formatChatTime(timestamp: number) {
   }
 
   return messageDate.toLocaleDateString("en-GB");
+}
+
+function formatLastSeen(timestamp: number | null) {
+  if (!timestamp) return "offline";
+
+  const date = new Date(timestamp);
+  const today = new Date();
+  const time = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  if (date.toDateString() === today.toDateString()) {
+    return `last seen today at ${time}`;
+  }
+
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `last seen yesterday at ${time}`;
+  }
+
+  return `last seen ${date.toLocaleDateString("en-GB")} at ${time}`;
 }
 
 type SidebarTab = "chats" | "groups";
@@ -131,6 +156,8 @@ function Dashboard() {
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isJoinGroupOpen, setIsJoinGroupOpen] = useState(false);
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+  const [selectedMessageInfo, setSelectedMessageInfo] =
+    useState<GroupMessage | null>(null);
 
   // Media upload state
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -584,6 +611,11 @@ function Dashboard() {
     0
   );
 
+  // Live group object (keeps participants & lastRead synced in real time)
+  const currentGroup = selectedGroup
+    ? (userGroups.find((g) => g.id === selectedGroup.id) ?? selectedGroup)
+    : null;
+
   // Render media inside a message bubble (shared for private & group chats)
   const renderMessageMedia = (item: ChatMessage) => {
     if (!item.mediaUrl) return null;
@@ -661,7 +693,7 @@ function Dashboard() {
             aria-label="WhatsApp"
             className="grid h-[42px] w-[42px] shrink-0 place-items-center text-[#00a884] max-[640px]:h-9 max-[640px]:w-9"
           >
-            <MessageCircle size={25} strokeWidth={2.2} />
+            <WhatsAppLogo size={26} />
           </div>
 
           {/* Chats tab */}
@@ -987,9 +1019,11 @@ function Dashboard() {
                     {selectedGroup.name}
                   </h2>
                   <GroupInviteCodeBadge
-                    inviteCode={selectedGroup.inviteCode}
+                    inviteCode={currentGroup?.inviteCode ?? selectedGroup.inviteCode}
                     memberCount={
-                      Object.keys(selectedGroup.participants ?? {}).length
+                      Object.keys(
+                        currentGroup?.participants ?? selectedGroup.participants ?? {}
+                      ).length
                     }
                   />
                 </div>
@@ -1080,6 +1114,37 @@ function Dashboard() {
                               minute: "2-digit",
                             })}
                           </span>
+
+                          {isSent && (() => {
+                            const otherIds = Object.keys(
+                              currentGroup?.participants ?? {}
+                            ).filter((uid) => uid !== user?.uid);
+                            const lastReadMap = currentGroup?.lastRead ?? {};
+                            const isReadByAll =
+                              otherIds.length > 0 &&
+                              otherIds.every(
+                                (uid) => (lastReadMap[uid] ?? 0) >= item.createdAt
+                              );
+
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setSelectedMessageInfo(item)}
+                                title="Message info (Read by)"
+                                aria-label="Message info"
+                                className="inline-flex cursor-pointer items-center border-0 bg-transparent p-0"
+                              >
+                                <CheckCheck
+                                  size={15}
+                                  className={
+                                    isReadByAll
+                                      ? "text-[#53bdeb]"
+                                      : "text-[#8696a0]"
+                                  }
+                                />
+                              </button>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -1179,7 +1244,7 @@ function Dashboard() {
                   <p className="mt-0.5 text-xs text-[#667781] dark:text-[#aebac1] max-[640px]:text-[10px]">
                     {selectedUserPresence?.isOnline
                       ? "online"
-                      : "offline"}
+                      : formatLastSeen(selectedUserPresence?.lastOnline ?? null)}
                   </p>
                 </div>
               </div>
@@ -1336,7 +1401,7 @@ function Dashboard() {
           /* ── Empty state ── */
           <div className="flex flex-1 flex-col items-center justify-center border-b-[5px] border-[#00a884] bg-[#f8f9fa] dark:bg-[#111b21] px-[30px] py-[30px] text-center max-[640px]:hidden">
             <div className="mb-[25px] grid h-[170px] w-[170px] place-items-center rounded-full border border-[#e8edef] dark:border-[#303d45] bg-[#f0f2f5] dark:bg-[#202c33] text-[#00a884]">
-              <MessageCircle size={64} strokeWidth={1.35} />
+              <WhatsAppLogo size={72} />
             </div>
 
             <h2 className="m-0 text-[30px] font-light tracking-normal text-[#41525d] dark:text-[#e9edef]">
@@ -1401,6 +1466,103 @@ function Dashboard() {
           />
         </div>
       )}
+
+      {/* Group Message Info (Read Receipts) Modal */}
+      {selectedMessageInfo && currentGroup && (() => {
+        const otherIds = Object.keys(currentGroup.participants ?? {}).filter(
+          (uid) => uid !== user?.uid
+        );
+        const lastReadMap = currentGroup.lastRead ?? {};
+        const readBy = otherIds.filter(
+          (uid) => (lastReadMap[uid] ?? 0) >= selectedMessageInfo.createdAt
+        );
+        const pendingBy = otherIds.filter(
+          (uid) => (lastReadMap[uid] ?? 0) < selectedMessageInfo.createdAt
+        );
+
+        return (
+          <div
+            onClick={() => setSelectedMessageInfo(null)}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-xl bg-white dark:bg-[#202c33] shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between border-b border-[#e9edef] dark:border-[#303d45] px-5 py-3.5">
+                <h3 className="m-0 text-base font-semibold text-[#111b21] dark:text-[#e9edef]">
+                  Message Info
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMessageInfo(null)}
+                  aria-label="Close"
+                  className="grid h-8 w-8 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-[#f0f2f5] dark:hover:bg-[#374650]"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="max-h-[65dvh] overflow-y-auto p-5 space-y-4">
+                <div className="rounded-lg bg-[#d9fdd3] dark:bg-[#005c4b] px-3 py-2 text-xs text-[#111b21] dark:text-[#e9edef]">
+                  {selectedMessageInfo.text ||
+                    selectedMessageInfo.fileName ||
+                    "Media attachment"}
+                </div>
+
+                {/* Read by */}
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#53bdeb]">
+                    <CheckCheck size={15} />
+                    <span>Read by ({readBy.length})</span>
+                  </div>
+                  {readBy.length > 0 ? (
+                    <ul className="m-0 list-none space-y-2 p-0">
+                      {readBy.map((uid) => (
+                        <li
+                          key={uid}
+                          className="flex items-center justify-between text-sm text-[#111b21] dark:text-[#e9edef]"
+                        >
+                          <span>{getSenderName(uid)}</span>
+                          <span className="text-[11px] text-[#667781] dark:text-[#aebac1]">
+                            {formatChatTime(lastReadMap[uid])}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="m-0 text-xs text-[#8696a0]">No one yet</p>
+                  )}
+                </div>
+
+                {/* Delivered to / Pending */}
+                <div>
+                  <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-[#8696a0]">
+                    <CheckCheck size={15} />
+                    <span>Delivered to ({pendingBy.length})</span>
+                  </div>
+                  {pendingBy.length > 0 ? (
+                    <ul className="m-0 list-none space-y-1.5 p-0">
+                      {pendingBy.map((uid) => (
+                        <li
+                          key={uid}
+                          className="text-sm text-[#667781] dark:text-[#aebac1]"
+                        >
+                          {getSenderName(uid)}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="m-0 text-xs text-[#8696a0]">
+                      Read by everyone
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -6,13 +6,13 @@ import {
 } from "firebase/auth";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  MessageCircle,
   Eye,
   EyeOff,
   User,
   Mail,
   LockKeyhole,
 } from "lucide-react";
+import { WhatsAppLogo } from "./WhatsAppLogo";
 
 import { auth } from "../services/firebase";
 import { saveUserProfile } from "../services/userService";
@@ -131,7 +131,7 @@ const handleRegister = async (e: FormEvent) => {
       <header className="h-52 bg-[#00a884]">
         <div className="max-w-6xl mx-auto px-6 pt-8">
           <div className="flex items-center gap-3 text-white">
-            <MessageCircle size={34} />
+            <WhatsAppLogo size={34} />
             <span className="text-2xl font-semibold tracking-wide">
               ChatSpace
             </span>
@@ -146,7 +146,7 @@ const handleRegister = async (e: FormEvent) => {
           {/* Left Panel */}
           <div className="hidden md:flex bg-[#f7f9fa] dark:bg-[#182229] flex-col justify-center items-center p-10 text-center border-r border-gray-100 dark:border-gray-700">
             <div className="w-36 h-36 rounded-full bg-[#d9fdd3] flex items-center justify-center mb-7">
-              <MessageCircle size={76} className="text-[#00a884]" />
+              <WhatsAppLogo size={76} className="text-[#00a884]" />
             </div>
 
             <h1 className="text-3xl font-light text-gray-800 dark:text-gray-100 mb-4">
