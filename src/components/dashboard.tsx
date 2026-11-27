@@ -76,6 +76,19 @@ import {
 
 import { EncryptedMedia } from "./EncryptedMedia";
 import { WhatsAppLogo } from "./WhatsAppLogo";
+import { VoiceCallModal } from "./VoiceCallModal";
+import {
+  startCall,
+  updateCallStatus,
+  subscribeToCall,
+  subscribeToIncomingCalls,
+  type CallSession,
+} from "../services/callService";
+import {
+  joinVoiceChannel,
+  leaveVoiceChannel,
+  setVoiceMicMuted,
+} from "../services/agoraService";
 
 import ThemeToggle from "./themeToggle";
 
@@ -175,6 +188,12 @@ function Dashboard() {
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
   const cancelRecordingFlagRef = useRef(false);
+
+  // Voice call state (Agora + Firebase signaling)
+  const [activeCall, setActiveCall] = useState<CallSession | null>(null);
+  const [isCallMuted, setIsCallMuted] = useState(false);
+  const [callError, setCallError] = useState("");
+  const joinedChannelRef = useRef<string | null>(null);
 
   // ── Subscriptions ──────────────────────────────────────────────
 
@@ -510,8 +529,130 @@ function Dashboard() {
   useEffect(() => {
     return () => {
       cancelVoiceRecording();
+      void leaveVoiceChannel();
     };
   }, []);
+
+  // Listen for incoming voice calls
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubscribe = subscribeToIncomingCalls(user.uid, (incoming) => {
+      if (incoming && !activeCall) {
+        setCallError("");
+        setActiveCall(incoming);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid, activeCall]);
+
+  // Sync active call state & join/leave Agora channel
+  useEffect(() => {
+    if (!activeCall?.id) return;
+
+    let closeTimer: number | null = null;
+
+    const unsubscribe = subscribeToCall(activeCall.id, (updated) => {
+      if (!updated) {
+        void leaveVoiceChannel();
+        joinedChannelRef.current = null;
+        setActiveCall(null);
+        return;
+      }
+
+      setActiveCall(updated);
+
+      if (
+        updated.status === "accepted" &&
+        joinedChannelRef.current !== updated.channelName
+      ) {
+        joinedChannelRef.current = updated.channelName;
+        const role = updated.callerId === user?.uid ? "caller" : "callee";
+        joinVoiceChannel(updated.channelName, role).catch((err) => {
+          console.error("Agora join failed:", err);
+          setCallError(
+            err instanceof Error ? err.message : "Failed to connect audio."
+          );
+        });
+      }
+
+      if (updated.status === "rejected" || updated.status === "ended") {
+        void leaveVoiceChannel();
+        joinedChannelRef.current = null;
+        setIsCallMuted(false);
+        closeTimer = window.setTimeout(() => {
+          setActiveCall(null);
+          setCallError("");
+        }, 1200);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      if (closeTimer !== null) window.clearTimeout(closeTimer);
+    };
+  }, [activeCall?.id]);
+
+  // Voice call handlers
+  const handleStartVoiceCall = async () => {
+    if (!user || !selectedChat || activeCall) return;
+    setCallError("");
+    setIsCallMuted(false);
+
+    try {
+      const callerName = user.displayName || user.email || user.phoneNumber || "User";
+      const session = await startCall(
+        user.uid,
+        callerName,
+        selectedChat.uid,
+        selectedChat.username
+      );
+      setActiveCall(session);
+    } catch (error) {
+      console.error("Error starting call:", error);
+      setDashboardError("Failed to start voice call.");
+    }
+  };
+
+  const handleAcceptCall = async () => {
+    if (!activeCall) return;
+    setCallError("");
+    try {
+      await updateCallStatus(activeCall.id, "accepted");
+    } catch (error) {
+      console.error("Error accepting call:", error);
+      setCallError("Failed to accept call.");
+    }
+  };
+
+  const handleRejectCall = async () => {
+    if (!activeCall) return;
+    try {
+      await updateCallStatus(activeCall.id, "rejected");
+    } catch (error) {
+      console.error("Error rejecting call:", error);
+    }
+  };
+
+  const handleEndCall = async () => {
+    if (!activeCall) return;
+    try {
+      await updateCallStatus(activeCall.id, "ended");
+    } catch (error) {
+      console.error("Error ending call:", error);
+    } finally {
+      await leaveVoiceChannel();
+      joinedChannelRef.current = null;
+      setIsCallMuted(false);
+    }
+  };
+
+  const handleToggleCallMute = async () => {
+    const nextMuted = !isCallMuted;
+    setIsCallMuted(nextMuted);
+    await setVoiceMicMuted(nextMuted);
+  };
 
   // Clear selected media
   const clearSelectedFile = () => {
@@ -1493,7 +1634,10 @@ function Dashboard() {
 
               <div className="flex shrink-0 items-center gap-[6px] text-[#54656f] dark:text-[#aebac1] max-[900px]:gap-0 max-[640px]:gap-0">
                 <button
-                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white max-[640px]:h-8 max-[640px]:w-8"
+                  type="button"
+                  onClick={handleStartVoiceCall}
+                  disabled={Boolean(activeCall)}
+                  className="grid h-10 w-10 cursor-pointer place-items-center rounded-full text-[#54656f] dark:text-[#aebac1] transition-colors duration-150 hover:bg-[#f0f2f5] dark:hover:bg-[#374650] hover:text-[#202c33] dark:hover:text-white disabled:cursor-not-allowed disabled:opacity-50 max-[640px]:h-8 max-[640px]:w-8"
                   aria-label="Voice call"
                   title="Voice call"
                 >
@@ -1761,6 +1905,18 @@ function Dashboard() {
           </div>
         );
       })()}
+
+      {/* Voice Call Modal */}
+      <VoiceCallModal
+        call={activeCall}
+        currentUserId={user?.uid ?? ""}
+        isMuted={isCallMuted}
+        errorMessage={callError}
+        onAccept={handleAcceptCall}
+        onReject={handleRejectCall}
+        onEnd={handleEndCall}
+        onToggleMute={handleToggleCallMute}
+      />
     </div>
   );
 }
